@@ -1,0 +1,25 @@
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+from loguru import logger
+
+load_dotenv()
+
+MODEL = os.getenv("MODEL", "qwen3-vl:4b")  # 使用的 Ollama 模型
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888/search")  # SearXNG API
+MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "5"))  # 單輪工具呼叫上限
+MAX_SEARCH_CHARS = int(os.getenv("MAX_SEARCH_CHARS", "1200"))  # 搜尋結果字元上限
+SEARCH_TIMEOUT = float(os.getenv("SEARCH_TIMEOUT", "8.0"))  # 搜尋逾時秒數
+SEARCH_RETRIES = int(os.getenv("SEARCH_RETRIES", "2"))  # 搜尋重試次數
+HISTORY_KEEP = int(os.getenv("HISTORY_KEEP", "10"))  # 對話歷史保留則數
+HISTORY_FILE = Path(os.getenv("HISTORY_FILE", "history.json"))  # 歷史儲存路徑
+
+# 只輸出 DEBUG 以上的 log 到 stderr，不干擾 stdout 的對話輸出
+logger.remove()
+logger.add(
+    sys.stderr,
+    level="DEBUG",
+    format="<green>{time:HH:mm:ss}</green> | <level>{level: <5}</level> | {message}",
+)
