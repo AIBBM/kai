@@ -14,12 +14,12 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 
-from config import HISTORY_FILE, HISTORY_KEEP, MAX_TOOL_CALLS
+from config import HISTORY_FILE, HISTORY_KEEP, MAX_TOOL_CALLS, NUM_CTX
 from models import ModelProfile, get_profile
-from tools import SEARCH_TOOL, budget_results, clean_thinking, run_tool, web_search
+from tools import SEARCH_TOOL, clean_thinking, run_tool, web_search
 
 
-class QwenAgent:
+class Agent:
     def __init__(self, model: str):
         self.profile: ModelProfile = get_profile(model)
         self.console = Console()
@@ -29,6 +29,8 @@ class QwenAgent:
             "web_search": web_search,
             # "k8s_monitor": k8s_monitor,
         }
+        if NUM_CTX:
+            self.profile.num_ctx = NUM_CTX
         self._reset_date()
         self._load_history()
 
@@ -60,7 +62,7 @@ class QwenAgent:
         return any(kw in content for kw in self._TIME_KEYWORDS)
 
     def _load_history(self):
-        """啟動時岝試從 HISTORY_FILE 載入過往對話，自動過濾時間問答。"""
+        """啟動時嘗試從 HISTORY_FILE 載入過往對話，自動過濾時間問答。"""
         if HISTORY_FILE.exists():
             try:
                 saved = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
@@ -84,7 +86,7 @@ class QwenAgent:
                 logger.warning(f"載入歷史失敗：{e}")
 
     def _rotate_history(self):
-        """記憑體超過 HISTORY_KEEP * 2 則時自動移除最舊的非-system 訊息。"""
+        """記憶條數超過 HISTORY_KEEP * 2 則時自動移除最舊的非-system 訊息。"""
         system = [m for m in self.history if m["role"] == "system"]
         rest = [m for m in self.history if m["role"] != "system"]
         if len(rest) > HISTORY_KEEP * 2:
@@ -135,9 +137,14 @@ class QwenAgent:
             title_style="bold cyan",
         )
         table.add_column("#", style="dim", width=3)
-        table.add_column("標題", style="white")
-        for i, (_, content) in enumerate(results, 1):
-            table.add_row(str(i), content.split("\n")[0][:60])
+        table.add_column("標題", style="white", no_wrap=False)
+        # 每一筆結果是以 [ 開頭的 markdown 連結行
+        n = 0
+        for _, content in results:
+            for line in content.split("\n"):
+                if line.startswith("["):
+                    n += 1
+                    table.add_row(str(n), line)
         self.console.print(table)
 
     async def chat(self, user_msg: dict):
@@ -238,7 +245,8 @@ class QwenAgent:
                 self.history.append(
                     {"role": "assistant", "content": "".join(reply_parts)}
                 )
-                self._rotate_history()  # 記憑體超限時自動移除舊訊息
+                self._rotate_history()
+                self.save_history()  # 每輪就儲存，避免 crash 遺失
                 return
 
             messages.append(
@@ -256,8 +264,7 @@ class QwenAgent:
                     *[run_tool(tc, self.tools_map) for tc in tool_calls]
                 )
 
-            results = budget_results(list(results))
-            self._render_search_table(results)
+            self._render_search_table(list(results))
 
             for fn_name, result in results:
                 messages.append({"role": "tool", "content": result, "name": fn_name})

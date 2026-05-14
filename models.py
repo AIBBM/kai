@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -8,8 +8,6 @@ class ModelProfile:
     supports_vision: bool = False
     supports_tools: bool = True
     num_ctx: int = 4096
-    # 在這裡註冊模型提供給 Ollama 的工具定義列表
-    tools: list = field(default_factory=list)
 
 
 # 已知模型登記表——新增模型只需在這裡加一行

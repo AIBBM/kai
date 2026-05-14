@@ -5,6 +5,12 @@ import time
 import httpx
 from loguru import logger
 from pydantic import BaseModel, ValidationError, field_validator
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from config import MAX_SEARCH_CHARS, SEARCH_RETRIES, SEARCH_TIMEOUT, SEARXNG_URL
 
@@ -22,7 +28,7 @@ SEARCH_TOOL = {
     },
 }
 
-# 對應 ANSI escape code、控制字元、常見模型隔離標籤
+# 對應 ANSI escape code、控制字元、常見模型隱藏標簽
 CLEAN_PATTERN = re.compile(
     r"\x1b\[[0-9;]*[mABCDHJKSTf]"
     r"|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
@@ -31,12 +37,12 @@ CLEAN_PATTERN = re.compile(
 
 
 def clean_thinking(text: str) -> str:
-    """移除 ANSI 跳脫碼、控制字元、常見隐藏標籤。"""
+    """移除 ANSI 跳脸碼、控制字元、常見隱藏標簽。"""
     return CLEAN_PATTERN.sub("", text)
 
 
 class WebSearchArgs(BaseModel):
-    """定義 web_search 的入參格式，對 AI 傳入的參數做強型別校驗。"""
+    """web_search 入參格式，對 AI 傳入的參數做強型別校驗。"""
 
     query: str
     num_results: int = 3
@@ -51,7 +57,6 @@ class WebSearchArgs(BaseModel):
     @field_validator("num_results")
     @classmethod
     def num_results_range(cls, v: int) -> int:
-        # 防止 AI 傳入過大的 num_results 占满 context window
         if not 1 <= v <= 10:
             raise ValueError("num_results 必須介於 1-10")
         return v
@@ -65,10 +70,7 @@ def estimate_tokens(text: str) -> int:
 
 
 def budget_results(results: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """
-    控制搜尋結果的總字元數在 MAX_SEARCH_CHARS 以內。
-    超達時逐筆截短，超出預算的結果剈階。
-    """
+    """控制搜尋結果的總字元數在 MAX_SEARCH_CHARS 以內。"""
     total = sum(len(r) for _, r in results)
     if total <= MAX_SEARCH_CHARS:
         return results
@@ -86,38 +88,44 @@ def budget_results(results: list[tuple[str, str]]) -> list[tuple[str, str]]:
 
 
 async def web_search(query: str, num_results: int = 3) -> str:
-    """非同步打 SearXNG API，支援逾時與重試。"""
+    """非同步打 SearXNG API，使用 tenacity 做 exponential backoff 重試。"""
     t0 = time.perf_counter()
-    last_err: Exception | None = None
-    for attempt in range(1, SEARCH_RETRIES + 2):
+
+    async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT) as client:
+
+        @retry(
+            stop=stop_after_attempt(SEARCH_RETRIES + 1),
+            wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+            retry=retry_if_exception_type((httpx.TimeoutException, httpx.HTTPStatusError)),
+            before_sleep=lambda state: logger.warning(
+                f"搜尋 '{query}' 第 {state.attempt_number} 次失敗，重試中..."
+            ),
+            reraise=True,
+        )
+        async def _fetch() -> list:
+            resp = await client.get(SEARXNG_URL, params={"q": query, "format": "json"})
+            resp.raise_for_status()
+            return resp.json().get("results", [])
+
         try:
-            async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT) as client:
-                resp = await client.get(
-                    SEARXNG_URL, params={"q": query, "format": "json"}
-                )
-                resp.raise_for_status()
-            elapsed = time.perf_counter() - t0
-            items = resp.json().get("results", [])[:num_results]
-            logger.debug(f"搜尋 '{query}' 完成，{len(items)} 筆，{elapsed:.2f}s")
-            if not items:
-                return "No results found."
-            pairs = [(r["title"], f"[{r['title']}]({r['url']})\n{r.get('content', '')}") for r in items]
-            budgeted = budget_results(pairs)
-            result = "\n\n".join(text for _, text in budgeted)
-            logger.debug(f"傳給模型的內容（{len(result)} 字元）:\n{result}")
-            return result
-        except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
-            last_err = e
-            logger.warning(f"搜尋 '{query}' 第 {attempt} 次失敗：{e}")
-    return f"[Search failed after {SEARCH_RETRIES + 1} attempts: {last_err}]"
+            items = (await _fetch())[:num_results]
+        except Exception as e:
+            logger.error(f"搜尋 '{query}' 全部重試失敗：{e}")
+            return f"[Search failed: {e}]"
 
+    elapsed = time.perf_counter() - t0
+    logger.debug(f"搜尋 '{query}' 完成，{len(items)} 筆，{elapsed:.2f}s")
+    if not items:
+        return "No results found."
 
-if __name__ == "__main__":
-    import sys
-
-    query = sys.argv[1] if len(sys.argv) > 1 else "台北天氣"
-    n = int(sys.argv[2]) if len(sys.argv) > 2 else 3
-    print(asyncio.run(web_search(query, n)))
+    pairs = [
+        (r["title"], f"[{r['title']}]({r['url']})\n{r.get('content', '')}")
+        for r in items
+    ]
+    budgeted = budget_results(pairs)
+    result = "\n\n".join(text for _, text in budgeted)
+    logger.debug(f"傳給模型的內容（{len(result)} 字元）:\n{result}")
+    return result
 
 
 async def run_tool(tc, tools_map: dict) -> tuple[str, str]:
@@ -134,10 +142,17 @@ async def run_tool(tc, tools_map: dict) -> tuple[str, str]:
     try:
         args = WebSearchArgs.model_validate(raw)
     except ValidationError as e:
-        # 回傳模型可讀的錯誤，讓 AI 自行修正（self-healing）
         error_msg = f"[ValidationError] {e.error_count()} 個錯誤:\n{e}"
         logger.warning(f"tool call 參數校驗失敗：{error_msg}")
         return fn_name, error_msg
 
     fn = tools_map[fn_name]
     return fn_name, await fn(args.query, args.num_results)
+
+
+if __name__ == "__main__":
+    import sys
+
+    query = sys.argv[1] if len(sys.argv) > 1 else "台北天氣"
+    n = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+    print(asyncio.run(web_search(query, n)))
