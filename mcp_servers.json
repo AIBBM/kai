@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "_twstock-db": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://mcpuser:REDACTED@localhost:5432/twstock"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"]
+    }
+  }
+}

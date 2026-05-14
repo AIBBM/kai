@@ -54,6 +54,12 @@ REGISTRY: dict[str, ModelProfile] = {
         supports_vision=True,
         num_ctx=4096,
     ),
+    "qwen3.5:4b": ModelProfile(
+        "qwen3.5:4b",
+        supports_thinking=True,
+        supports_vision=True,
+        num_ctx=4096,
+    ),
 }
 
 

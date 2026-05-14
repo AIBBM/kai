@@ -14,9 +14,14 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 
-from config import HISTORY_FILE, HISTORY_KEEP, MAX_TOOL_CALLS, NUM_CTX
+from config import HISTORY_FILE, HISTORY_KEEP, MAX_TOOL_CALLS, NUM_CTX, USERNAME
 from models import ModelProfile, get_profile
-from tools import SEARCH_TOOL, clean_thinking, run_tool, web_search
+from tools import BASH_TOOL, SEARCH_TOOL, bash_exec, clean_thinking, run_tool, web_search
+
+try:
+    from mcp_client import MCPClient
+except ImportError:
+    MCPClient = None  # type: ignore
 
 
 class Agent:
@@ -27,10 +32,13 @@ class Agent:
         # 工具對映表：新工具只需在這裡登記
         self.tools_map: dict = {
             "web_search": web_search,
-            # "k8s_monitor": k8s_monitor,
+            "bash_exec": bash_exec,
         }
         if NUM_CTX:
             self.profile.num_ctx = NUM_CTX
+        self.mcp_client: "MCPClient | None" = None
+        self.mcp_context: str = ""
+        self._cancelled = False
         self._reset_date()
         self._load_history()
 
@@ -41,11 +49,13 @@ class Agent:
             "role": "system",
             "content": (
                 f"目前時間是 {now}（台灣時區 UTC+8）。"
+                f"使用者的名字是 {USERNAME}。"
                 "這是系統提供的最新時間，絕對正確。"
                 "如果對話歷史中有舊的時間記錄，一律以此為準，不得引用歷史中的時間。"
                 "你有 web_search 工具可以查詢即時資訊。"
                 "遇到任何你不確定的事實、日期、新聞、時事，直接呼叫 web_search，不要說『我要搜尋』或『請稍等』，直接呼叫工具。"
                 "只有在確定自己知道答案時才直接回答，其他情況一律先搜尋再回答。"
+                + (f"\n\n你也有資料庫查詢工具可以存取台股資料。{self.mcp_context}" if self.mcp_context else "")
             ),
         }
         if self.history and self.history[0]["role"] == "system":
@@ -129,7 +139,7 @@ class Agent:
             )
 
     def _render_search_table(self, results: list[tuple[str, str]]):
-        """將搜尋結果摘要顯示為表格。"""
+        """將 web_search 結果摘要顯示為表格。"""
         table = Table(
             title="🔍 搜尋結果摘要",
             box=box.SIMPLE_HEAD,
@@ -138,7 +148,6 @@ class Agent:
         )
         table.add_column("#", style="dim", width=3)
         table.add_column("標題", style="white", no_wrap=False)
-        # 每一筆結果是以 [ 開頭的 markdown 連結行
         n = 0
         for _, content in results:
             for line in content.split("\n"):
@@ -146,6 +155,17 @@ class Agent:
                     n += 1
                     table.add_row(str(n), line)
         self.console.print(table)
+
+    def _render_mcp_result(self, tool_name: str, content: str):
+        """MCP tool 結果顯示為 Panel。"""
+        self.console.print(
+            Panel(
+                content[:2000] + ("..." if len(content) > 2000 else ""),
+                title=f"[bold cyan]🔧 {tool_name}[/bold cyan]",
+                border_style="cyan",
+                expand=False,
+            )
+        )
 
     async def chat(self, user_msg: dict):
         """
@@ -166,9 +186,11 @@ class Agent:
         messages = self._trim_history()
 
         # 根據模型特性决定要傳哪些工具
-        active_tools = (
-            [SEARCH_TOOL] if self.profile.supports_tools and self.tools_map else []
-        )
+        active_tools = []
+        if self.profile.supports_tools and self.tools_map:
+            active_tools.extend([SEARCH_TOOL, BASH_TOOL])
+        if self.profile.supports_tools and self.mcp_client:
+            active_tools.extend(self.mcp_client.tools)
 
         tool_call_count = 0
         while True:
@@ -197,6 +219,8 @@ class Agent:
                 return
 
             for chunk in stream:
+                if self._cancelled:
+                    break
                 msg = chunk.message
                 last_chunk = chunk
 
@@ -225,6 +249,13 @@ class Agent:
 
             if reply_live:
                 reply_live.stop()
+
+            if self._cancelled:
+                self._cancelled = False
+                self.console.print("[yellow]\n⏹ 已取消[/yellow]")
+                if self.history and self.history[-1]["role"] == "user":
+                    self.history.pop()
+                return
 
             t_total = time.perf_counter() - t_start
             usage = (
@@ -258,13 +289,18 @@ class Agent:
             )
 
             with self.console.status(
-                "[bold cyan]正在搜尋中...[/bold cyan]", spinner="dots"
+                "[bold cyan]正在執行工具...[/bold cyan]", spinner="dots"
             ):
                 results = await asyncio.gather(
-                    *[run_tool(tc, self.tools_map) for tc in tool_calls]
+                    *[run_tool(tc, self.tools_map, self.mcp_client) for tc in tool_calls]
                 )
 
-            self._render_search_table(list(results))
+            web_results = [(fn, r) for fn, r in results if fn == "web_search"]
+            other_results = [(fn, r) for fn, r in results if fn != "web_search"]
+            if web_results:
+                self._render_search_table(web_results)
+            for fn_name, result in other_results:
+                self._render_mcp_result(fn_name, result)
 
             for fn_name, result in results:
                 messages.append({"role": "tool", "content": result, "name": fn_name})

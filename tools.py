@@ -12,7 +12,23 @@ from tenacity import (
     wait_exponential,
 )
 
-from config import MAX_SEARCH_CHARS, SEARCH_RETRIES, SEARCH_TIMEOUT, SEARXNG_URL
+from config import BASH_TIMEOUT, MAX_SEARCH_CHARS, SEARCH_NUM_RESULTS, SEARCH_RETRIES, SEARCH_TIMEOUT, SEARXNG_URL
+
+BASH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "bash_exec",
+        "description": "Execute a bash command and return stdout/stderr. Use for file ops, system info, running scripts.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Bash command to execute"},
+                "timeout": {"type": "integer", "description": "Timeout in seconds (default 30)"},
+            },
+            "required": ["command"],
+        },
+    },
+}
 
 # Ollama tool calling 格式定義
 SEARCH_TOOL = {
@@ -45,7 +61,7 @@ class WebSearchArgs(BaseModel):
     """web_search 入參格式，對 AI 傳入的參數做強型別校驗。"""
 
     query: str
-    num_results: int = 3
+    num_results: int = SEARCH_NUM_RESULTS
 
     @field_validator("query")
     @classmethod
@@ -87,7 +103,7 @@ def budget_results(results: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return compressed
 
 
-async def web_search(query: str, num_results: int = 3) -> str:
+async def web_search(query: str, num_results: int = SEARCH_NUM_RESULTS) -> str:
     """非同步打 SearXNG API，使用 tenacity 做 exponential backoff 重試。"""
     t0 = time.perf_counter()
 
@@ -128,26 +144,64 @@ async def web_search(query: str, num_results: int = 3) -> str:
     return result
 
 
-async def run_tool(tc, tools_map: dict) -> tuple[str, str]:
-    """由工具對映表動態分發，校驗參數後執行。"""
+async def bash_exec(command: str, timeout: int = 0) -> str:
+    """執行 bash 指令，回傳 stdout + stderr。"""
+    t = timeout or BASH_TIMEOUT
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=t)
+        out = stdout.decode(errors="replace").strip()
+        err = stderr.decode(errors="replace").strip()
+        parts = []
+        if out:
+            parts.append(out)
+        if err:
+            parts.append(f"[stderr]\n{err}")
+        result = "\n".join(parts) or "(no output)"
+        logger.debug(f"bash_exec exit={proc.returncode}: {command[:60]}")
+        return result
+    except asyncio.TimeoutError:
+        return f"[Error] 超時 {t}s"
+    except Exception as e:
+        return f"[Error] {e}"
+
+
+async def run_tool(tc, tools_map: dict, mcp_client=None) -> tuple[str, str]:
+    """由工具對映表動態分發；MCP tool 優先，其次本地 tools_map。"""
     import json
 
     fn_name = tc.function.name
     raw_args = tc.function.arguments
     raw = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
 
+    # MCP tool
+    if mcp_client and fn_name in mcp_client.tool_names:
+        try:
+            result = await mcp_client.call(fn_name, raw)
+            return fn_name, result
+        except Exception as e:
+            logger.error(f"MCP tool '{fn_name}' 呼叫失敗：{e}")
+            return fn_name, f"[MCP Error] {e}"
+
+    # 本地 tool
     if fn_name not in tools_map:
         return fn_name, f"[Error] 未知工具：{fn_name}"
 
-    try:
-        args = WebSearchArgs.model_validate(raw)
-    except ValidationError as e:
-        error_msg = f"[ValidationError] {e.error_count()} 個錯誤:\n{e}"
-        logger.warning(f"tool call 參數校驗失敗：{error_msg}")
-        return fn_name, error_msg
-
     fn = tools_map[fn_name]
-    return fn_name, await fn(args.query, args.num_results)
+    if fn_name == "web_search":
+        try:
+            args = WebSearchArgs.model_validate(raw)
+        except ValidationError as e:
+            error_msg = f"[ValidationError] {e.error_count()} 個錯誤:\n{e}"
+            logger.warning(f"tool call 參數校驗失敗：{error_msg}")
+            return fn_name, error_msg
+        return fn_name, await fn(args.query, args.num_results)
+
+    return fn_name, await fn(**raw)
 
 
 if __name__ == "__main__":
