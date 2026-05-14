@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import time
 from datetime import datetime
 
@@ -14,7 +15,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 
-from config import HISTORY_FILE, HISTORY_KEEP, MAX_TOOL_CALLS, NUM_CTX, USERNAME
+from config import HISTORY_FILE, HISTORY_KEEP, MAX_SEARCH_CHARS, MAX_TOOL_CALLS, NUM_CTX, USERNAME
 from models import ModelProfile, get_profile
 from tools import BASH_TOOL, SEARCH_TOOL, bash_exec, clean_thinking, run_tool, web_search
 
@@ -56,6 +57,9 @@ class Agent:
                 "遇到任何你不確定的事實、日期、新聞、時事，直接呼叫 web_search，不要說『我要搜尋』或『請稍等』，直接呼叫工具。"
                 "只有在確定自己知道答案時才直接回答，其他情況一律先搜尋再回答。"
                 + (f"\n\n你也有資料庫查詢工具可以存取台股資料。{self.mcp_context}" if self.mcp_context else "")
+                + (f"\n\n你還有以下 MCP 工具，遇到相關要求必須直接呼叫，絕對不要要求使用者提供內容：{', '.join(self.mcp_client.tool_names)}。"
+                  f"目前工作目錄：{os.getcwd()}。"
+                  f"例如要看檔案內容就呼叫 read_file，列目錄就呼叫 list_directory，不要說『請提供內容』。" if self.mcp_client and self.mcp_client.tool_names else "")
             ),
         }
         if self.history and self.history[0]["role"] == "system":
@@ -156,6 +160,16 @@ class Agent:
                     table.add_row(str(n), line)
         self.console.print(table)
 
+    def _trim_tool_result(self, content: str) -> str:
+        """HTML 去標簽；超長截斷。"""
+        import re
+        if re.search(r"<html|<!doctype", content[:200], re.IGNORECASE):
+            content = re.sub(r"<[^>]+>", " ", content)
+            content = re.sub(r"\s+", " ", content).strip()
+        if len(content) > MAX_SEARCH_CHARS:
+            content = content[:MAX_SEARCH_CHARS] + f"\n...[已截斷，共 {len(content)} 字元]"
+        return content
+
     def _render_mcp_result(self, tool_name: str, content: str):
         """MCP tool 結果顯示為 Panel。"""
         self.console.print(
@@ -163,7 +177,7 @@ class Agent:
                 content[:2000] + ("..." if len(content) > 2000 else ""),
                 title=f"[bold cyan]🔧 {tool_name}[/bold cyan]",
                 border_style="cyan",
-                expand=False,
+                expand=True,
             )
         )
 
@@ -303,7 +317,7 @@ class Agent:
                 self._render_mcp_result(fn_name, result)
 
             for fn_name, result in results:
-                messages.append({"role": "tool", "content": result, "name": fn_name})
+                messages.append({"role": "tool", "content": self._trim_tool_result(result), "name": fn_name})
 
             tool_call_count += 1
             if tool_call_count >= MAX_TOOL_CALLS:

@@ -13,3 +13,4 @@ wheels/
 .env
 history.json
 .prompt_history
+.aider*

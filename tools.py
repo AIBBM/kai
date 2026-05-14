@@ -18,7 +18,7 @@ BASH_TOOL = {
     "type": "function",
     "function": {
         "name": "bash_exec",
-        "description": "Execute a bash command and return stdout/stderr. Use for file ops, system info, running scripts.",
+        "description": "Execute a bash command and return stdout/stderr. Use for file ops, system info, running scripts. Prefer a single command with built-in repetition (e.g. ping -c 3) over multiple tool calls.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -53,7 +53,7 @@ CLEAN_PATTERN = re.compile(
 
 
 def clean_thinking(text: str) -> str:
-    """移除 ANSI 跳脸碼、控制字元、常見隱藏標簽。"""
+    """移除 ANSI 跳脫碼、控制字元、常見隱藏標簽。"""
     return CLEAN_PATTERN.sub("", text)
 
 
