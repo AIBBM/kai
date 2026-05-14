@@ -1,3 +1,4 @@
+import asyncio
 import re
 import time
 
@@ -100,14 +101,23 @@ async def web_search(query: str, num_results: int = 3) -> str:
             logger.debug(f"搜尋 '{query}' 完成，{len(items)} 筆，{elapsed:.2f}s")
             if not items:
                 return "No results found."
-            return "\n\n".join(
-                f"[{r['title']}]({r['url']})\n{r.get('content', '')[:200]}"
-                for r in items
-            )
+            pairs = [(r["title"], f"[{r['title']}]({r['url']})\n{r.get('content', '')}") for r in items]
+            budgeted = budget_results(pairs)
+            result = "\n\n".join(text for _, text in budgeted)
+            logger.debug(f"傳給模型的內容（{len(result)} 字元）:\n{result}")
+            return result
         except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
             last_err = e
             logger.warning(f"搜尋 '{query}' 第 {attempt} 次失敗：{e}")
     return f"[Search failed after {SEARCH_RETRIES + 1} attempts: {last_err}]"
+
+
+if __name__ == "__main__":
+    import sys
+
+    query = sys.argv[1] if len(sys.argv) > 1 else "台北天氣"
+    n = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+    print(asyncio.run(web_search(query, n)))
 
 
 async def run_tool(tc, tools_map: dict) -> tuple[str, str]:

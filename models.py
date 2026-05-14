@@ -44,6 +44,18 @@ REGISTRY: dict[str, ModelProfile] = {
         supports_vision=True,
         num_ctx=4096,
     ),
+    "gemma4:e2b": ModelProfile(
+        "gemma4:e2b",
+        supports_thinking=False,
+        supports_vision=True,
+        num_ctx=4096,
+    ),
+    "gemma4:e4b": ModelProfile(
+        "gemma4:e4b",
+        supports_thinking=False,
+        supports_vision=True,
+        num_ctx=4096,
+    ),
 }
 
 
