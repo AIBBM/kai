@@ -116,6 +116,13 @@ async def main():
         await mcp.start()
         agent.mcp_client = mcp
         agent.mcp_context = await _fetch_db_schema(mcp)
+        fs_paths = [
+            arg for name, cfg in servers.items()
+            if not name.startswith("_") and cfg.get("command") in ("npx", "node")
+            for arg in cfg.get("args", []) if arg.startswith("/")
+        ]
+        if fs_paths:
+            agent.mcp_context += f"\n檔案系統可存取目錄：{', '.join(fs_paths)}"
 
     mcp_info = (
         f"[bold]MCP:[/bold] {', '.join(agent.mcp_client.tool_names)}"
