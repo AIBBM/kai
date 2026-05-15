@@ -211,7 +211,7 @@ class Agent:
             )
         )
 
-    async def chat(self, user_msg: dict):
+    async def chat(self, user_msg: dict, on_token=None, on_thinking=None):
         """
         單輪對話入口，支援 tool calling loop：
           1. 呼叫模型（stream）
@@ -275,20 +275,27 @@ class Agent:
                         if not reply_parts:
                             if thinking_parts:
                                 t_thinking_end = time.perf_counter()
-                                self._render_thinking("".join(thinking_parts))
-                            self.console.print(
-                                Rule("[bold green]🤖 AI[/bold green]", style="green")
-                            )
-                            live = Live(
-                                Markdown(""),
-                                console=self.console,
-                                transient=True,
-                                refresh_per_second=7,
-                                vertical_overflow="crop",
-                            )
-                            live.start()
+                                if on_thinking:
+                                    await on_thinking("".join(thinking_parts))
+                                else:
+                                    self._render_thinking("".join(thinking_parts))
+                            if not on_token:
+                                self.console.print(
+                                    Rule("[bold green]🤖 AI[/bold green]", style="green")
+                                )
+                                live = Live(
+                                    Markdown(""),
+                                    console=self.console,
+                                    transient=True,
+                                    refresh_per_second=7,
+                                    vertical_overflow="crop",
+                                )
+                                live.start()
                         reply_parts.append(msg.content)
-                        live.update(Markdown("".join(reply_parts)))
+                        if on_token:
+                            await on_token(msg.content)
+                        elif live:
+                            live.update(Markdown("".join(reply_parts)))
 
                     for tc in msg.tool_calls or []:
                         tool_calls.append(tc)
@@ -312,8 +319,8 @@ class Agent:
                     self.history.pop()
                 return
 
-            # 串流結束：transient 已清除 Live 區域，以 Markdown 重繪完整輸出
-            if reply_parts:
+            # 串流結束：transient 已清除 Live 區域，以 Markdown 重繪完整輸出（Rich 模式）
+            if reply_parts and not on_token:
                 self.console.print(Markdown("".join(reply_parts)))
 
             t_total = time.perf_counter() - t_start
