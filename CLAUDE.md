@@ -40,6 +40,7 @@ config.py        → all env-var constants (loaded once at import)
 2. If `tool_calls` present → `asyncio.gather` all tools concurrently → append `tool` messages → repeat
 3. Loop exits when model returns no tool calls or `MAX_TOOL_CALLS` is reached
 4. `save_history()` is called after every turn (not just on exit)
+5. `ollama.ResponseError` (e.g. model not found, thinking not supported) is caught inside the stream loop — Live is stopped before printing the error to avoid display corruption
 
 ### Esc key cancellation (`main.py: _watch_esc`)
 
@@ -51,7 +52,18 @@ During `agent.chat()`, a concurrent `asyncio.to_thread` task watches stdin for E
 
 ### Adding a new model
 
-Add one entry to `REGISTRY` in `models.py`. Current models: `qwen3:4b`, `qwen3:8b`, `qwen3-vl:4b`, `qwen3.5:4b`, `gemma3:4b`, `gemma4:e2b/e4b`, `deepseek-r1:1.5b`, `llama3.2:3b`. The profile controls `supports_thinking`, `supports_vision`, `supports_tools`, and `num_ctx`. `NUM_CTX` in `.env` overrides all profiles at runtime.
+Add one entry to `REGISTRY` in `models.py`. Current models:
+
+| 模型 | thinking | vision | tools |
+|------|----------|--------|-------|
+| `qwen3:4b/8b` | ✓ | - | ✓ |
+| `qwen3-vl:4b`, `qwen3.5:4b` | ✓ | ✓ | ✓ |
+| `gemma3:4b` | - | ✓ | ✓ |
+| `gemma4:e2b/e4b` | ✓ | ✓ | ✓ |
+| `deepseek-r1:1.5b` | ✓ | - | ✗ |
+| `MFDoom/deepseek-r1-tool-calling:1.5b` | - | - | ✓ |
+
+`get_profile()` 回傳 `dataclasses.replace()` copy，避免 `Agent.__init__` 修改 `num_ctx` 時汙染 REGISTRY。`NUM_CTX` in `.env` overrides all profiles at runtime.
 
 ### Adding a new tool
 

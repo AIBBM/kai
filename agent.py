@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import time
 from datetime import datetime
 
@@ -68,7 +69,7 @@ class Agent:
             self.history.insert(0, system_msg)
 
     # 時間相關的關鍵字，匹配到即視為時間問答訊息
-    _TIME_KEYWORDS = ("現在時間", "幾點", "幾点", "是指", "時間是", "時區", "UTC")
+    _TIME_KEYWORDS = ("現在時間", "幾點", "幾点", "時間是", "時區", "UTC")
 
     def _is_time_message(self, msg: dict) -> bool:
         """判斷訊息是否與時間查詢相關，避免舊時間沙染新對話。"""
@@ -135,7 +136,7 @@ class Agent:
                 Panel(
                     content.strip(),
                     title="[bold yellow]💡 思考中[/bold yellow]",
-                    subtitle="[dim]Qwen Reasoning Engine[/dim]",
+                    subtitle=f"[dim]{self.profile.name}[/dim]",
                     border_style="yellow",
                     expand=False,
                     padding=(0, 2),
@@ -162,7 +163,6 @@ class Agent:
 
     def _trim_tool_result(self, content: str) -> str:
         """HTML 去標簽；超長截斷。"""
-        import re
         if re.search(r"<html|<!doctype", content[:200], re.IGNORECASE):
             content = re.sub(r"<[^>]+>", " ", content)
             content = re.sub(r"\s+", " ", content).strip()
@@ -174,7 +174,7 @@ class Agent:
         """MCP tool 結果顯示為 Panel。"""
         self.console.print(
             Panel(
-                content[:2000] + ("..." if len(content) > 2000 else ""),
+                content[:MAX_SEARCH_CHARS] + ("..." if len(content) > MAX_SEARCH_CHARS else ""),
                 title=f"[bold cyan]🔧 {tool_name}[/bold cyan]",
                 border_style="cyan",
                 expand=True,
@@ -232,34 +232,45 @@ class Agent:
                 self.history.pop()
                 return
 
-            for chunk in stream:
-                if self._cancelled:
-                    break
-                msg = chunk.message
-                last_chunk = chunk
+            try:
+                for chunk in stream:
+                    if self._cancelled:
+                        break
+                    msg = chunk.message
+                    last_chunk = chunk
 
-                # 思考過程：累積內容，流程結束後一次性渲染成 Panel
-                if msg.thinking:
-                    thinking_parts.append(clean_thinking(msg.thinking))
+                    # 思考過程：累積內容，流程結束後一次性渲染成 Panel
+                    if msg.thinking:
+                        thinking_parts.append(clean_thinking(msg.thinking))
 
-                # 正式回答：用 Live 即時更新 Markdown
-                if msg.content:
-                    if not reply_parts:
-                        if thinking_parts:
-                            t_thinking_end = time.perf_counter()
-                            self._render_thinking("".join(thinking_parts))
-                        self.console.print(
-                            Rule("[bold green]🤖 AI[/bold green]", style="green")
-                        )
-                        reply_live = Live(console=self.console, refresh_per_second=10)
-                        reply_live.start()
-                    reply_parts.append(msg.content)
-                    if reply_live:
-                        # 直接渲染 Markdown，不包 Panel，避免復製時混入邊框字元
-                        reply_live.update(Markdown("".join(reply_parts)))
+                    # 正式回答：用 Live 即時更新 Markdown
+                    if msg.content:
+                        if not reply_parts:
+                            if thinking_parts:
+                                t_thinking_end = time.perf_counter()
+                                self._render_thinking("".join(thinking_parts))
+                            self.console.print(
+                                Rule("[bold green]🤖 AI[/bold green]", style="green")
+                            )
+                            reply_live = Live(console=self.console, refresh_per_second=10)
+                            reply_live.start()
+                        reply_parts.append(msg.content)
+                        if reply_live:
+                            # 直接渲染 Markdown，不包 Panel，避免復製時混入邊框字元
+                            reply_live.update(Markdown("".join(reply_parts)))
 
-                for tc in msg.tool_calls or []:
-                    tool_calls.append(tc)
+                    for tc in msg.tool_calls or []:
+                        tool_calls.append(tc)
+            except ollama.ResponseError as e:
+                if reply_live:
+                    reply_live.stop()
+                    reply_live = None
+                self.console.print(
+                    f"[bold red]❌ 模型錯誤：{e}[/bold red]\n"
+                    "[dim]請確認模型已下載（ollama pull <model>）並在 models.py 的 REGISTRY 中正確設定。[/dim]"
+                )
+                self.history.pop()
+                return
 
             if reply_live:
                 reply_live.stop()
@@ -322,6 +333,10 @@ class Agent:
             tool_call_count += 1
             if tool_call_count >= MAX_TOOL_CALLS:
                 self.console.print(
-                    f"[bold red]⚠️ 已達搜尋上限 {MAX_TOOL_CALLS} 次，強制結束[/bold red]"
+                    f"[bold red]⚠️ 已達工具呼叫上限 {MAX_TOOL_CALLS} 次，強制結束[/bold red]"
                 )
+                if self.history and self.history[-1]["role"] == "user":
+                    # 移除孤立的 user message，避免下次對話誤以為上一輪沒有回覆
+                    self.history.pop()
+                self.save_history()
                 return

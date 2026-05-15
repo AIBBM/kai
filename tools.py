@@ -23,7 +23,6 @@ BASH_TOOL = {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Bash command to execute"},
-                "timeout": {"type": "integer", "description": "Timeout in seconds (default 30)"},
             },
             "required": ["command"],
         },
