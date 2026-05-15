@@ -75,11 +75,6 @@ Markdown.ai-msg {
     background: $boost;
 }
 
-#prompt:disabled {
-    border: tall $text-disabled;
-    background: $surface;
-    color: $text-disabled;
-}
 """
 
 
