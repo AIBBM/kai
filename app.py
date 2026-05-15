@@ -7,8 +7,15 @@ from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Input, Markdown, Static
 from textual import work
 
+from loguru import logger
+
 from agent import Agent
 from config import MODEL, SEARXNG_URL
+
+# Textual 控制整個畫面，loguru 寫 stderr 會閃爍——改寫到 log 檔
+logger.remove()
+logger.add("agent_tui.log", level="DEBUG", rotation="5 MB",
+           format="{time:HH:mm:ss} | {level:<5} | {message}")
 
 
 CSS = """
@@ -101,10 +108,20 @@ class ChatApp(App[None]):
             await stream_md.update("".join(buf))
             msgs.scroll_end(animate=False)
 
+        async def on_done(elapsed, thinking_s, gen_tok, prompt_tok) -> None:
+            parts = []
+            if thinking_s:
+                parts.append(f"思考 {thinking_s:.1f}s")
+            parts.append(f"共 {elapsed:.1f}s")
+            if gen_tok:
+                parts.append(f"生成 {gen_tok} tokens")
+            self.sub_title = " · ".join(parts)
+
         await self.agent.chat(
             {"role": "user", "content": text},
             on_token=on_token,
             on_thinking=on_thinking,
+            on_done=on_done,
         )
 
     def action_cancel_stream(self) -> None:

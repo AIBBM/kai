@@ -212,7 +212,7 @@ class Agent:
             )
         )
 
-    async def chat(self, user_msg: dict, on_token=None, on_thinking=None):
+    async def chat(self, user_msg: dict, on_token=None, on_thinking=None, on_done=None):
         """
         單輪對話入口，支援 tool calling loop：
           1. 呼叫模型（stream）
@@ -345,6 +345,8 @@ class Agent:
                 )
                 self._rotate_history()
                 self.save_history()  # 每輪就儲存，避免 crash 遺失
+                if on_done:
+                    await on_done(t_total, t_thinking_end and t_thinking_end - t_start, usage[0], usage[1])
                 return
 
             messages.append(
