@@ -137,6 +137,10 @@ class ChatApp(App[None]):
         prompt.placeholder = "⏳ 等待回覆..."
 
         try:
+            def _at_bottom() -> bool:
+                """使用者是否在底部（允許 3 行誤差）。"""
+                return msgs.scroll_y >= msgs.max_scroll_y - 3
+
             async def on_thinking(content: str) -> None:
                 preview = content[:2000] + ("…" if len(content) > 2000 else "")
                 await msgs.mount(
@@ -147,17 +151,23 @@ class ChatApp(App[None]):
                         classes="thinking",
                     )
                 )
-                msgs.scroll_end(animate=False)
+                msgs.scroll_end(animate=False)  # 新訊息出現時總是捲到底
 
             async def on_token(chunk: str) -> None:
                 nonlocal stream_md
+                buf.append(chunk)
                 if stream_md is None:
+                    # 第一個 token：掛載元件並捲到底
                     await msgs.mount(Rule(classes="ai-sep"))
                     stream_md = Markdown("", classes="ai-msg")
                     await msgs.mount(stream_md)
-                buf.append(chunk)
-                await stream_md.update("".join(buf) + " ▋")
-                msgs.scroll_end(animate=False)
+                    await stream_md.update("".join(buf) + " ▋")
+                    msgs.scroll_end(animate=False)
+                else:
+                    # 後續 token：只有在底部才跟著捲動
+                    await stream_md.update("".join(buf) + " ▋")
+                    if _at_bottom():
+                        msgs.scroll_end(animate=False)
 
             async def on_done(elapsed, thinking_s, gen_tok, prompt_tok) -> None:
                 if stream_md:
@@ -169,9 +179,11 @@ class ChatApp(App[None]):
                 if gen_tok:
                     parts.append(f"{gen_tok} tokens")
                 stats = " · ".join(parts)
+                at_bot = _at_bottom()
                 await msgs.mount(Static(stats, classes="stats", markup=False))
                 self.sub_title = f"{MODEL} · {stats}"
-                msgs.scroll_end(animate=False)
+                if at_bot:
+                    msgs.scroll_end(animate=False)
 
             await self.agent.chat(
                 {"role": "user", "content": text},
