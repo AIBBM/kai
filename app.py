@@ -3,15 +3,14 @@ from __future__ import annotations
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
-from textual.widgets import Collapsible, Footer, Header, Input, Markdown, Rule, Static
+from textual.containers import Horizontal, VerticalScroll
+from textual.widgets import Collapsible, Footer, Header, Input, Label, Markdown, Rule, Static
 from textual import work
 from loguru import logger
 
 from agent import Agent
 from config import MODEL
 
-# Textual 控制整個畫面，loguru 轉到 log 檔避免閃爍
 logger.remove()
 logger.add(
     "agent_tui.log",
@@ -21,29 +20,40 @@ logger.add(
 )
 
 CSS = """
+/* ─── 訊息捲動區 ─── */
 #messages {
     height: 1fr;
+    padding: 0 2 1 2;
+    scrollbar-gutter: stable;
+}
+
+/* 歡迎提示 */
+#welcome {
+    border: round $surface;
+    color: $text-muted;
     padding: 1 2;
+    margin: 1 0;
+    text-align: center;
 }
 
-/* 使用者訊息：左側藍色粗邊 */
+/* 使用者訊息 */
 .user-bubble {
-    background: $primary-background;
     border-left: thick $primary;
+    background: $primary-background;
     padding: 0 1;
-    margin: 0 0 1 0;
+    margin: 1 0 0 0;
 }
 
-/* 思考面板：黃色框，預設收合 */
+/* 思考面板 */
 .thinking {
     border: round $warning;
-    margin: 0 0 1 0;
+    margin: 1 0 0 0;
 }
 
-/* AI 回應分隔線 */
+/* AI 分隔線 */
 Rule.ai-sep {
     color: $success;
-    margin: 0;
+    margin: 1 0 0 0;
 }
 
 /* AI Markdown 回應 */
@@ -52,29 +62,44 @@ Markdown.ai-msg {
     margin: 0;
 }
 
-/* 回應後的統計列 */
+/* 統計列 */
 .stats {
-    color: $text-disabled;
+    color: $text-muted;
     text-align: right;
     padding: 0 1;
     margin: 0 0 1 0;
 }
 
-/* 歡迎提示 */
-#welcome {
-    border: dashed $primary-background;
-    color: $text-muted;
-    padding: 1;
-    margin: 0 0 1 0;
-}
-
-/* 輸入框 */
-#prompt {
-    border: tall $primary;
-    margin: 0 2 0 2;
+/* ─── 輸入列 ─── */
+#input-bar {
+    height: 3;
+    border: round $primary;
+    margin: 0 1 1 1;
     background: $boost;
 }
 
+#input-prefix {
+    width: auto;
+    color: $primary;
+    text-style: bold;
+    padding: 0 0 0 1;
+}
+
+#prompt {
+    width: 1fr;
+    border: blank;
+    background: transparent;
+    padding: 0 1 0 0;
+}
+
+/* 串流中：邊框變暗，前綴變色 */
+#input-bar.streaming {
+    border: round $panel;
+}
+
+#input-bar.streaming #input-prefix {
+    color: $text-muted;
+}
 """
 
 
@@ -101,7 +126,9 @@ class ChatApp(App[None]):
                 id="welcome",
                 markup=True,
             )
-        yield Input(placeholder=f"傳訊息給 {MODEL}...", id="prompt")
+        with Horizontal(id="input-bar"):
+            yield Label("Duncan ❯", id="input-prefix")
+            yield Input(placeholder=f"傳訊息給 {MODEL}...", id="prompt")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -128,17 +155,20 @@ class ChatApp(App[None]):
 
     @work(exclusive=True)
     async def _send(self, text: str) -> None:
-        msgs = self.query_one("#messages", VerticalScroll)
-        prompt = self.query_one("#prompt", Input)
+        msgs    = self.query_one("#messages",    VerticalScroll)
+        bar     = self.query_one("#input-bar",   Horizontal)
+        prefix  = self.query_one("#input-prefix", Label)
+        prompt  = self.query_one("#prompt",      Input)
         stream_md: Markdown | None = None
         buf: list[str] = []
 
+        bar.add_class("streaming")
+        prefix.update("⏳")
         prompt.disabled = True
-        prompt.placeholder = "⏳ 等待回覆..."
+        prompt.placeholder = "等待回覆..."
 
         try:
             def _at_bottom() -> bool:
-                """使用者是否在底部（允許 3 行誤差）。"""
                 return msgs.scroll_y >= msgs.max_scroll_y - 3
 
             async def on_thinking(content: str) -> None:
@@ -151,20 +181,18 @@ class ChatApp(App[None]):
                         classes="thinking",
                     )
                 )
-                msgs.scroll_end(animate=False)  # 新訊息出現時總是捲到底
+                msgs.scroll_end(animate=False)
 
             async def on_token(chunk: str) -> None:
                 nonlocal stream_md
                 buf.append(chunk)
                 if stream_md is None:
-                    # 第一個 token：掛載元件並捲到底
                     await msgs.mount(Rule(classes="ai-sep"))
                     stream_md = Markdown("", classes="ai-msg")
                     await msgs.mount(stream_md)
                     await stream_md.update("".join(buf) + " ▋")
                     msgs.scroll_end(animate=False)
                 else:
-                    # 後續 token：只有在底部才跟著捲動
                     await stream_md.update("".join(buf) + " ▋")
                     if _at_bottom():
                         msgs.scroll_end(animate=False)
@@ -191,10 +219,11 @@ class ChatApp(App[None]):
                 on_thinking=on_thinking,
                 on_done=on_done,
             )
-            # 工具 loop 返回時 on_done 不呼叫，確保串流游標清除
             if stream_md and buf:
                 await stream_md.update("".join(buf))
         finally:
+            bar.remove_class("streaming")
+            prefix.update("Duncan ❯")
             prompt.disabled = False
             prompt.placeholder = f"傳訊息給 {MODEL}..."
             prompt.focus()
