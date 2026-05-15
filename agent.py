@@ -55,6 +55,7 @@ class Agent:
         self.mcp_client: "MCPClient | None" = None
         self.mcp_context: str = ""
         self._cancelled = False
+        self._ollama = ollama.AsyncClient()
         self._reset_date()
         self._load_history()
 
@@ -245,7 +246,7 @@ class Agent:
             t_thinking_end: float | None = None
             last_chunk = None
             try:
-                stream = ollama.chat(
+                stream = await self._ollama.chat(
                     model=self.profile.name,
                     messages=messages,
                     think=self.profile.supports_thinking,  # 依 profile 開關
@@ -262,7 +263,7 @@ class Agent:
 
             live: "Live | None" = None
             try:
-                for chunk in stream:
+                async for chunk in stream:
                     if self._cancelled:
                         break
                     msg = chunk.message
