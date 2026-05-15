@@ -9,16 +9,30 @@ import httpx
 import ollama
 from loguru import logger
 from rich import box
-from rich.console import Console
 from rich.live import Live
+from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 
-from config import HISTORY_FILE, HISTORY_KEEP, MAX_SEARCH_CHARS, MAX_TOOL_CALLS, NUM_CTX, USERNAME
+from config import (
+    HISTORY_FILE,
+    HISTORY_KEEP,
+    MAX_SEARCH_CHARS,
+    MAX_TOOL_CALLS,
+    NUM_CTX,
+    USERNAME,
+)
 from models import ModelProfile, get_profile
-from tools import BASH_TOOL, SEARCH_TOOL, bash_exec, clean_thinking, run_tool, web_search
+from tools import (
+    BASH_TOOL,
+    SEARCH_TOOL,
+    bash_exec,
+    clean_thinking,
+    run_tool,
+    web_search,
+)
 
 try:
     from mcp_client import MCPClient
@@ -54,13 +68,26 @@ class Agent:
                 f"使用者的名字是 {USERNAME}。"
                 "這是系統提供的最新時間，絕對正確。"
                 "如果對話歷史中有舊的時間記錄，一律以此為準，不得引用歷史中的時間。"
-                "你有 web_search 工具可以查詢即時資訊。"
-                "遇到任何你不確定的事實、日期、新聞、時事，直接呼叫 web_search，不要說『我要搜尋』或『請稍等』，直接呼叫工具。"
-                "只有在確定自己知道答案時才直接回答，其他情況一律先搜尋再回答。"
-                + (f"\n\n你也有資料庫查詢工具可以存取台股資料。{self.mcp_context}" if self.mcp_context else "")
-                + (f"\n\n你還有以下 MCP 工具，遇到相關要求必須直接呼叫，絕對不要要求使用者提供內容：{', '.join(self.mcp_client.tool_names)}。"
-                  f"目前工作目錄：{os.getcwd()}。"
-                  f"例如要看檔案內容就呼叫 read_file，列目錄就呼叫 list_directory，不要說『請提供內容』。" if self.mcp_client and self.mcp_client.tool_names else "")
+                + (
+                    "你有 web_search 工具可以查詢即時資訊。"
+                    "遇到任何你不確定的事實、日期、新聞、時事，直接呼叫 web_search，不要說『我要搜尋』或『請稍等』，直接呼叫工具。"
+                    "只有在確定自己知道答案時才直接回答，其他情況一律先搜尋再回答。"
+                    if self.profile.supports_tools
+                    else ""
+                )
+                # + "回覆時不要使用 --- 水平分隔線。"
+                + (
+                    f"\n\n你也有資料庫查詢工具可以存取台股資料。{self.mcp_context}"
+                    if self.mcp_context
+                    else ""
+                )
+                + (
+                    f"\n\n你還有以下 MCP 工具，遇到相關要求必須直接呼叫，絕對不要要求使用者提供內容：{', '.join(self.mcp_client.tool_names)}。"
+                    f"目前工作目錄：{os.getcwd()}。"
+                    f"例如要看檔案內容就呼叫 read_file，列目錄就呼叫 list_directory，不要說『請提供內容』。"
+                    if self.mcp_client and self.mcp_client.tool_names
+                    else ""
+                )
             ),
         }
         if self.history and self.history[0]["role"] == "system":
@@ -167,14 +194,17 @@ class Agent:
             content = re.sub(r"<[^>]+>", " ", content)
             content = re.sub(r"\s+", " ", content).strip()
         if len(content) > MAX_SEARCH_CHARS:
-            content = content[:MAX_SEARCH_CHARS] + f"\n...[已截斷，共 {len(content)} 字元]"
+            content = (
+                content[:MAX_SEARCH_CHARS] + f"\n...[已截斷，共 {len(content)} 字元]"
+            )
         return content
 
     def _render_mcp_result(self, tool_name: str, content: str):
         """MCP tool 結果顯示為 Panel。"""
         self.console.print(
             Panel(
-                content[:MAX_SEARCH_CHARS] + ("..." if len(content) > MAX_SEARCH_CHARS else ""),
+                content[:MAX_SEARCH_CHARS]
+                + ("..." if len(content) > MAX_SEARCH_CHARS else ""),
                 title=f"[bold cyan]🔧 {tool_name}[/bold cyan]",
                 border_style="cyan",
                 expand=True,
@@ -214,8 +244,6 @@ class Agent:
             t_start = time.perf_counter()
             t_thinking_end: float | None = None
             last_chunk = None
-            reply_live: Live | None = None
-
             try:
                 stream = ollama.chat(
                     model=self.profile.name,
@@ -232,6 +260,7 @@ class Agent:
                 self.history.pop()
                 return
 
+            live: "Live | None" = None
             try:
                 for chunk in stream:
                     if self._cancelled:
@@ -239,11 +268,9 @@ class Agent:
                     msg = chunk.message
                     last_chunk = chunk
 
-                    # 思考過程：累積內容，流程結束後一次性渲染成 Panel
                     if msg.thinking:
                         thinking_parts.append(clean_thinking(msg.thinking))
 
-                    # 正式回答：用 Live 即時更新 Markdown
                     if msg.content:
                         if not reply_parts:
                             if thinking_parts:
@@ -252,19 +279,22 @@ class Agent:
                             self.console.print(
                                 Rule("[bold green]🤖 AI[/bold green]", style="green")
                             )
-                            reply_live = Live(console=self.console, refresh_per_second=10)
-                            reply_live.start()
+                            live = Live(
+                                Markdown(""),
+                                console=self.console,
+                                transient=True,
+                                refresh_per_second=7,
+                                vertical_overflow="crop",
+                            )
+                            live.start()
                         reply_parts.append(msg.content)
-                        if reply_live:
-                            # 直接渲染 Markdown，不包 Panel，避免復製時混入邊框字元
-                            reply_live.update(Markdown("".join(reply_parts)))
+                        live.update(Markdown("".join(reply_parts)))
 
                     for tc in msg.tool_calls or []:
                         tool_calls.append(tc)
             except ollama.ResponseError as e:
-                if reply_live:
-                    reply_live.stop()
-                    reply_live = None
+                if live:
+                    live.stop()
                 self.console.print(
                     f"[bold red]❌ 模型錯誤：{e}[/bold red]\n"
                     "[dim]請確認模型已下載（ollama pull <model>）並在 models.py 的 REGISTRY 中正確設定。[/dim]"
@@ -272,8 +302,8 @@ class Agent:
                 self.history.pop()
                 return
 
-            if reply_live:
-                reply_live.stop()
+            if live:
+                live.stop()
 
             if self._cancelled:
                 self._cancelled = False
@@ -281,6 +311,10 @@ class Agent:
                 if self.history and self.history[-1]["role"] == "user":
                     self.history.pop()
                 return
+
+            # 串流結束：transient 已清除 Live 區域，以 Markdown 重繪完整輸出
+            if reply_parts:
+                self.console.print(Markdown("".join(reply_parts)))
 
             t_total = time.perf_counter() - t_start
             usage = (
@@ -317,7 +351,10 @@ class Agent:
                 "[bold cyan]正在執行工具...[/bold cyan]", spinner="dots"
             ):
                 results = await asyncio.gather(
-                    *[run_tool(tc, self.tools_map, self.mcp_client) for tc in tool_calls]
+                    *[
+                        run_tool(tc, self.tools_map, self.mcp_client)
+                        for tc in tool_calls
+                    ]
                 )
 
             web_results = [(fn, r) for fn, r in results if fn == "web_search"]
@@ -328,7 +365,13 @@ class Agent:
                 self._render_mcp_result(fn_name, result)
 
             for fn_name, result in results:
-                messages.append({"role": "tool", "content": self._trim_tool_result(result), "name": fn_name})
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": self._trim_tool_result(result),
+                        "name": fn_name,
+                    }
+                )
 
             tool_call_count += 1
             if tool_call_count >= MAX_TOOL_CALLS:
