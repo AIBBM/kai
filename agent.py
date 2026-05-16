@@ -212,7 +212,7 @@ class Agent:
             )
         )
 
-    async def chat(self, user_msg: dict, on_token=None, on_thinking=None, on_done=None):
+    async def chat(self, user_msg: dict, on_token=None, on_thinking=None, on_done=None, on_tool_call=None):
         """
         單輪對話入口，支援 tool calling loop：
           1. 呼叫模型（stream）
@@ -367,12 +367,18 @@ class Agent:
                     ]
                 )
 
-            web_results = [(fn, r) for fn, r in results if fn == "web_search"]
-            other_results = [(fn, r) for fn, r in results if fn != "web_search"]
-            if web_results:
-                self._render_search_table(web_results)
-            for fn_name, result in other_results:
-                self._render_mcp_result(fn_name, result)
+            # on_tool_call provided → TUI handles display; else → Rich console rendering
+            if on_tool_call:
+                for tc, (fn_name, result) in zip(tool_calls, results):
+                    args = dict(getattr(tc.function, "arguments", {}))
+                    await on_tool_call(fn_name, args, result)
+            else:
+                web_results = [(fn, r) for fn, r in results if fn == "web_search"]
+                other_results = [(fn, r) for fn, r in results if fn != "web_search"]
+                if web_results:
+                    self._render_search_table(web_results)
+                for fn_name, result in other_results:
+                    self._render_mcp_result(fn_name, result)
 
             for fn_name, result in results:
                 messages.append(
