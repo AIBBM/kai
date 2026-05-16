@@ -1,0 +1,151 @@
+/* ─── 主佈局 ─── */
+#app-grid {
+    height: 1fr;
+}
+
+#messages {
+    width: 1fr;
+    padding: 0 2 1 2;
+    scrollbar-gutter: stable;
+}
+
+/* ─── 側邊欄 ─── */
+#sidebar {
+    width: 26;
+    background: $surface;
+    border-left: tall $panel;
+    padding: 0 1 1 1;
+    overflow-y: auto;
+}
+
+.sidebar-title {
+    color: $accent;
+    text-style: bold;
+    margin: 1 0 0 0;
+    padding: 0;
+}
+
+.sidebar-content {
+    color: $text-muted;
+    padding: 0 0 0 1;
+    margin: 0;
+}
+
+/* ─── 訊息 ─── */
+#welcome {
+    border: round $surface;
+    color: $text-muted;
+    padding: 1 2;
+    margin: 1 0;
+    text-align: center;
+}
+
+.user-bubble {
+    border-left: thick $primary;
+    background: $primary-background;
+    padding: 0 1;
+    margin: 1 0 0 0;
+}
+
+.ai-header {
+    color: $success;
+    text-style: bold;
+    margin: 1 0 0 0;
+    padding: 0 1;
+}
+
+.thinking {
+    border: round $warning;
+    margin: 1 0 0 0;
+}
+
+.error-msg {
+    border-left: thick $error;
+    color: $error;
+    padding: 0 1;
+    margin: 1 0;
+}
+
+/* ─── AI 回應 ─── */
+AIMessage {
+    height: auto;
+    border-left: thick $surface;
+    background: $boost;
+    margin: 0 0 0 0;
+}
+
+AIMessage .md-view {
+    height: auto;
+    padding: 0 1 0 1;
+    margin: 0;
+    border: none;
+    background: transparent;
+}
+
+AIMessage:focus, AIMessage .md-view:focus {
+    border: none;
+}
+
+
+AIMessage .ta-view {
+    display: none;
+    height: 5;
+    background: transparent;
+    border: none;
+    scrollbar-size: 1 1;
+}
+
+AIMessage.select-mode .md-view {
+    display: none;
+}
+
+AIMessage.select-mode .ta-view {
+    display: block;
+}
+
+.stats {
+    color: $text-muted;
+    text-align: right;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+/* ─── 工具除錯卡片 ─── */
+.tool-debug {
+    border-left: thick $warning;
+    margin: 0 0 0 0;
+    background: $boost;
+}
+
+.tool-debug > CollapsibleTitle {
+    color: $warning;
+}
+
+/* ─── 斜線指令選單 ─── */
+#cmd-overlay {
+    height: auto;
+    max-height: 10;
+    margin: 0 1 0 1;
+    display: none;
+    background: $surface;
+    border: round $primary;
+}
+
+/* ─── 輸入列 ─── */
+#prompt {
+    border: round $primary;
+    margin: 0 1 1 1;
+    background: $boost;
+    border-title-color: $primary;
+    border-title-style: bold;
+}
+
+#prompt:focus {
+    border: round $accent;
+    border-title-color: $accent;
+}
+
+#prompt.streaming {
+    border: round $warning;
+    border-title-color: $warning;
+}

@@ -5,7 +5,6 @@ from contextlib import AsyncExitStack
 from loguru import logger
 from mcp import ClientSession, StdioServerParameters
 import httpx
-from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
@@ -27,6 +26,14 @@ class MCPClient:
     @property
     def tool_names(self) -> set[str]:
         return set(self._tool_to_server)
+
+    @property
+    def server_summary(self) -> dict[str, int]:
+        """Connected server → tool count."""
+        counts: dict[str, int] = {}
+        for server in self._tool_to_server.values():
+            counts[server] = counts.get(server, 0) + 1
+        return counts
 
     async def start(self):
         await self._stack.__aenter__()

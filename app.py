@@ -22,6 +22,7 @@ from loguru import logger
 from agent import Agent
 from config import MODEL
 from models import REGISTRY
+from mcp_client import MCPClient, load_mcp_servers
 
 logger.remove()
 logger.add(
@@ -62,6 +63,31 @@ def _append_prompt_history(text: str) -> None:
             f.write(entry)
     except Exception as e:
         logger.warning(f"寫入 prompt history 失敗：{e}")
+
+
+async def _fetch_db_schema(mcp: MCPClient) -> str:
+    """查詢資料庫 table 清單，產生給模型的 schema hint（與 main.py 共用邏輯）。"""
+    sql = (
+        "SELECT hypertable_name AS table_name, 'hypertable' AS type "
+        "FROM timescaledb_information.hypertables "
+        "UNION ALL "
+        "SELECT relname, 'table' FROM pg_class cl "
+        "JOIN pg_namespace ns ON ns.oid = cl.relnamespace "
+        "WHERE ns.nspname = 'public' AND cl.relkind = 'r' "
+        "AND relname NOT IN (SELECT hypertable_name FROM timescaledb_information.hypertables) "
+        "AND relname NOT LIKE '%backup%' "
+        "ORDER BY table_name"
+    )
+    # 不同 postgres MCP server 暴露的工具名不同，依序探測第一個可用的
+    for tool_name in ("query", "execute_query", "pg_query", "read_query"):
+        if tool_name in mcp.tool_names:
+            try:
+                result = await mcp.call(tool_name, {"sql": sql})
+                return f"可查詢的資料表：\n{result}"
+            except Exception as e:
+                logger.warning(f"schema 查詢失敗（{tool_name}）：{e}")
+                break
+    return ""
 
 
 def _line_height(text: str, cols: int = 100) -> int:
@@ -126,161 +152,6 @@ class NavigableOptionList(OptionList):
             self.highlighted = next_idx
 
 
-CSS = """
-/* ─── 主佈局 ─── */
-#app-grid {
-    height: 1fr;
-}
-
-#messages {
-    width: 1fr;
-    padding: 0 2 1 2;
-    scrollbar-gutter: stable;
-}
-
-/* ─── 側邊欄 ─── */
-#sidebar {
-    width: 26;
-    background: $surface;
-    border-left: tall $panel;
-    padding: 0 1 1 1;
-    overflow-y: auto;
-}
-
-.sidebar-title {
-    color: $accent;
-    text-style: bold;
-    margin: 1 0 0 0;
-    padding: 0;
-}
-
-.sidebar-content {
-    color: $text-muted;
-    padding: 0 0 0 1;
-    margin: 0;
-}
-
-/* ─── 訊息 ─── */
-#welcome {
-    border: round $surface;
-    color: $text-muted;
-    padding: 1 2;
-    margin: 1 0;
-    text-align: center;
-}
-
-.user-bubble {
-    border-left: thick $primary;
-    background: $primary-background;
-    padding: 0 1;
-    margin: 1 0 0 0;
-}
-
-.ai-header {
-    color: $success;
-    text-style: bold;
-    margin: 1 0 0 0;
-    padding: 0 1;
-}
-
-.thinking {
-    border: round $warning;
-    margin: 1 0 0 0;
-}
-
-.error-msg {
-    border-left: thick $error;
-    color: $error;
-    padding: 0 1;
-    margin: 1 0;
-}
-
-/* ─── AI 回應 ─── */
-AIMessage {
-    height: auto;
-    border-left: thick $surface;
-    background: $boost;
-    margin: 0 0 0 0;
-}
-
-AIMessage .md-view {
-    height: auto;
-    padding: 0 1 0 1;
-    margin: 0;
-    border: none;
-    background: transparent;
-}
-
-AIMessage:focus, AIMessage .md-view:focus {
-    border: none;
-}
-
-
-AIMessage .ta-view {
-    display: none;
-    height: 5;
-    background: transparent;
-    border: none;
-    scrollbar-size: 1 1;
-}
-
-AIMessage.select-mode .md-view {
-    display: none;
-}
-
-AIMessage.select-mode .ta-view {
-    display: block;
-}
-
-.stats {
-    color: $text-muted;
-    text-align: right;
-    padding: 0 1;
-    margin: 0 0 1 0;
-}
-
-/* ─── 工具除錯卡片 ─── */
-.tool-debug {
-    border-left: thick $warning;
-    margin: 0 0 0 0;
-    background: $boost;
-}
-
-.tool-debug > CollapsibleTitle {
-    color: $warning;
-}
-
-/* ─── 斜線指令選單 ─── */
-#cmd-overlay {
-    height: auto;
-    max-height: 10;
-    margin: 0 1 0 1;
-    display: none;
-    background: $surface;
-    border: round $primary;
-}
-
-/* ─── 輸入列 ─── */
-#prompt {
-    border: round $primary;
-    margin: 0 1 1 1;
-    background: $boost;
-    border-title-color: $primary;
-    border-title-style: bold;
-}
-
-#prompt:focus {
-    border: round $accent;
-    border-title-color: $accent;
-}
-
-#prompt.streaming {
-    border: round $warning;
-    border-title-color: $warning;
-}
-"""
-
-
 class Sidebar(Widget):
     """工作目錄、上下文檔案、模型、Git 狀態側邊欄。"""
 
@@ -293,6 +164,8 @@ class Sidebar(Widget):
         yield Static("[dim]（無）[/dim]", classes="sidebar-content", id="sb-files", markup=True)
         yield Static("📋 Git 變更", classes="sidebar-title", markup=True)
         yield Static("", classes="sidebar-content", id="sb-git", markup=True)
+        yield Static("🔧 MCP 工具", classes="sidebar-title", markup=True)
+        yield Static("[dim]初始化中...[/dim]", classes="sidebar-content", id="sb-mcp", markup=True)
 
     def on_mount(self) -> None:
         self._refresh_git_worker()
@@ -318,6 +191,14 @@ class Sidebar(Widget):
     def set_files(self, paths: list[str]) -> None:
         text = "\n".join(f"[green]✓[/green] {p}" for p in paths) if paths else "[dim]（無）[/dim]"
         self.query_one("#sb-files", Static).update(text)
+
+    def set_mcp(self, summary: dict[str, int]) -> None:
+        if summary:
+            lines = [f"[green]{name}[/green] [dim]{n}t[/dim]" for name, n in summary.items()]
+            text = "\n".join(lines)
+        else:
+            text = "[dim]未啟用[/dim]"
+        self.query_one("#sb-mcp", Static).update(text)
 
 
 class AIMessage(Widget):
@@ -393,7 +274,7 @@ class ChatCommands(Provider):
 
 
 class ChatApp(App[None]):
-    CSS = CSS
+    CSS_PATH = "app.tcss"
     COMMANDS = App.COMMANDS | {ChatCommands}
 
     BINDINGS = [
@@ -454,6 +335,39 @@ class ChatApp(App[None]):
         self.query_one("#cmd-overlay", NavigableOptionList).border_title = "指令"
         # 每 15 秒輪詢 Git 狀態
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
+        self._init_mcp()
+
+    @work
+    async def _init_mcp(self) -> None:
+        """背景初始化 MCP servers，完成後更新 sidebar 和 agent。"""
+        sidebar = self.query_one("#sidebar", Sidebar)
+        servers = load_mcp_servers()
+        if not servers:
+            sidebar.set_mcp({})
+            return
+        mcp = MCPClient(servers)
+        await mcp.start()
+        if not mcp.tool_names:
+            sidebar.set_mcp({})
+            return
+        self.agent.mcp_client = mcp
+        self.agent.mcp_context = await _fetch_db_schema(mcp)
+        # 補充 filesystem 可存取路徑到 context
+        fs_paths = [
+            arg for name, cfg in servers.items()
+            if not name.startswith("_") and cfg.get("command") in ("npx", "node")
+            for arg in cfg.get("args", []) if arg.startswith("/")
+        ]
+        if fs_paths:
+            self.agent.mcp_context += f"\n檔案系統可存取目錄：{', '.join(fs_paths)}"
+        self.agent._reset_date()  # 重建 system prompt，注入 MCP 工具清單
+        sidebar.set_mcp(mcp.server_summary)
+        logger.info(f"MCP 初始化完成：{mcp.tool_names}")
+
+    async def on_unmount(self) -> None:
+        # MCPClient 用 AsyncExitStack 管理 stdio 子進程；不 stop 會留下孤兒進程
+        if self.agent.mcp_client:
+            await self.agent.mcp_client.stop()
 
     # ── 輸入事件 ──────────────────────────────────────────────────────────────
 
