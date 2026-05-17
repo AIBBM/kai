@@ -10,7 +10,7 @@ load_dotenv()
 MODEL = os.getenv("MODEL", "qwen3-vl:4b")  # 使用的 Ollama 模型
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888/search")  # SearXNG API
 NUM_CTX = int(os.getenv("NUM_CTX", "0"))  # context window 大小，0 表示使用模型預設
-MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "5"))  # 單輪工具呼叫上限
+MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "15"))  # 單輪工具呼叫上限
 MAX_SEARCH_CHARS = int(os.getenv("MAX_SEARCH_CHARS", "2500"))
 SEARCH_NUM_RESULTS = int(os.getenv("SEARCH_NUM_RESULTS", "5"))  # 搜尋結果字元上限
 SEARCH_TIMEOUT = float(os.getenv("SEARCH_TIMEOUT", "8.0"))  # 搜尋逾時秒數

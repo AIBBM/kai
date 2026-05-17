@@ -396,11 +396,14 @@ class Agent:
 
             tool_call_count += 1
             if tool_call_count >= MAX_TOOL_CALLS:
+                logger.warning(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，強制結束")
+                if self.history and self.history[-1]["role"] == "user":
+                    self.history.pop()
+                self.save_history()
+                if on_tool_call:
+                    # TUI mode: raise so _send() can show error widget
+                    raise RuntimeError(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，對話強制結束")
                 self.console.print(
                     f"[bold red]⚠️ 已達工具呼叫上限 {MAX_TOOL_CALLS} 次，強制結束[/bold red]"
                 )
-                if self.history and self.history[-1]["role"] == "user":
-                    # 移除孤立的 user message，避免下次對話誤以為上一輪沒有回覆
-                    self.history.pop()
-                self.save_history()
                 return
