@@ -83,9 +83,13 @@ class Agent:
                     else ""
                 )
                 + (
-                    f"\n\n你還有以下 MCP 工具，遇到相關要求必須直接呼叫，絕對不要要求使用者提供內容：{', '.join(self.mcp_client.tool_names)}。"
+                    f"\n\n你還有以下 MCP 工具：{', '.join(self.mcp_client.tool_names)}。"
                     f"目前工作目錄：{os.getcwd()}。"
-                    f"例如要看檔案內容就呼叫 read_file，列目錄就呼叫 list_directory，不要說『請提供內容』。"
+                    "\n工具優先順序（必須遵守）："
+                    "\n- 瀏覽器操作 → 只用 playwright MCP 工具（browser_navigate / browser_click 等），絕對不得用 bash 執行 node / npx / playwright CLI。"
+                    "\n- 檔案讀寫 → 只用 filesystem MCP 工具（read_file / write_file / list_directory 等），不得用 bash cat / ls / cp。"
+                    "\n- bash_exec 僅用於 MCP 無法涵蓋的純系統操作（如 git、uv、ping）。"
+                    "\n遇到相關要求直接呼叫對應 MCP 工具，不要說『請提供內容』或自行安裝套件。"
                     if self.mcp_client and self.mcp_client.tool_names
                     else ""
                 )
