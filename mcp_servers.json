@@ -10,7 +10,7 @@
     },
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--no-sandbox"]
+      "args": ["-y", "@playwright/mcp@latest", "--no-sandbox"]
     },
     "context7": {
       "type": "http",
