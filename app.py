@@ -38,8 +38,12 @@ logger.add(
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 PROMPT_HISTORY_FILE = Path(".prompt_history")
-# SGR mouse event pattern — leaks into Input when Playwright/WSLg resets terminal state
-_MOUSE_SEQ = re.compile(r"(?:\x1b)?\[<\d+;\d+;\d+[Mm]")
+# Mouse event debris that leaks into Input when Playwright/WSLg resets terminal mouse
+# tracking state. Textual consumes ESC and [ but the rest falls through as keystrokes:
+#   SGR full:    ESC[<35;80;25M  →  <35;80;25M  or  35;80;25M
+#   SGR partial: 80;25M
+# Pattern: optional ESC, optional [, optional <, then semicolon-separated numbers + M/m
+_MOUSE_SEQ = re.compile(r"(?:\x1b\[?)?<?(?:\d+;)+\d+[Mm]")
 
 
 def _load_prompt_history() -> list[str]:
@@ -431,16 +435,17 @@ class ChatApp(App[None]):
         prompt.cursor_position = len(prompt.value)
 
     def on_paste(self, event: events.Paste) -> None:
+        # Belt-and-suspenders: if sequences arrive as bracketed paste, drop the whole paste
         if _MOUSE_SEQ.search(event.text):
             event.prevent_default()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        # Strip SGR mouse sequences that leak in char-by-char when Playwright/WSLg
-        # resets terminal mouse-tracking state on window focus changes.
+        # When Playwright/WSLg resets terminal mouse-tracking state, SGR events and X10
+        # binary debris flood the input char-by-char. Just clear: user moved the mouse,
+        # not typed. Regex catches SGR; clearing handles binary X10 residue.
         if _MOUSE_SEQ.search(event.value):
-            cleaned = _MOUSE_SEQ.sub("", event.value)
-            event.input.value = cleaned
-            event.input.cursor_position = len(cleaned)
+            event.input.value = ""
+            event.input.cursor_position = 0
             return
         value = event.value
         overlay = self.query_one("#cmd-overlay", NavigableOptionList)

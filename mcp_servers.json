@@ -8,6 +8,10 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"]
     },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--no-sandbox"]
+    },
     "context7": {
       "type": "http",
       "url": "https://mcp.context7.com/mcp",
