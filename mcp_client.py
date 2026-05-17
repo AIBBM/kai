@@ -90,6 +90,34 @@ class MCPClient:
     async def stop(self):
         await self._stack.aclose()
 
+    def force_kill(self) -> None:
+        """Synchronously kill all direct child processes (MCP stdio servers).
+
+        Used when async stop() would deadlock due to anyio cross-task cancel scope.
+        pkill -P <ppid> sends SIGTERM to all direct children of this process.
+        """
+        import signal
+        import subprocess as sp
+        my_pid = os.getpid()
+        try:
+            sp.run(["pkill", "-TERM", "-P", str(my_pid)], capture_output=True, timeout=2)
+        except Exception:
+            # pkill not available — fall back to /proc scan (Linux only)
+            try:
+                from pathlib import Path
+                for entry in Path("/proc").iterdir():
+                    if not entry.name.isdigit():
+                        continue
+                    try:
+                        stat = (entry / "stat").read_text()
+                        ppid = int(stat.split(")", 1)[1].split()[1])
+                        if ppid == my_pid:
+                            os.kill(int(entry.name), signal.SIGTERM)
+                    except (ValueError, IndexError, PermissionError, FileNotFoundError, ProcessLookupError):
+                        pass
+            except Exception as e:
+                logger.warning(f"force_kill 失敗：{e}")
+
     async def call(self, tool_name: str, arguments: dict) -> str:
         server_name = self._tool_to_server[tool_name]
         session = self._sessions[server_name]

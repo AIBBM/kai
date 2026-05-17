@@ -367,15 +367,15 @@ class ChatApp(App[None]):
         sidebar.set_mcp(mcp.server_summary)
         logger.info(f"MCP 初始化完成：{mcp.tool_names}")
 
-    async def on_unmount(self) -> None:
+    def action_quit(self) -> None:
+        # Kill MCP stdio subprocesses before Textual's async shutdown sequence starts.
+        # Async stop() deadlocks across anyio task boundaries; sync kill avoids it.
         if self.agent.mcp_client:
-            try:
-                # Timeout prevents hang: anyio cancel scope was entered in the worker task
-                # but on_unmount runs in a different task, so stop() may never return.
-                # Subprocesses die with the process; 1.5s is enough for HTTP disconnect.
-                await asyncio.wait_for(self.agent.mcp_client.stop(), timeout=1.5)
-            except Exception:
-                pass
+            self.agent.mcp_client.force_kill()
+        self.exit()
+
+    def on_unmount(self) -> None:
+        pass
 
     # ── 輸入事件 ──────────────────────────────────────────────────────────────
 
