@@ -1,7 +1,8 @@
-import io
 import json
 import os
+import sys
 from contextlib import AsyncExitStack
+from typing import TextIO
 
 from loguru import logger
 from mcp import ClientSession, StdioServerParameters
@@ -12,21 +13,13 @@ from mcp.client.streamable_http import streamable_http_client
 from config import MCP_SERVERS_FILE
 
 
-class _LoguruStderr(io.TextIOBase):
-    """Redirect MCP server stderr lines to loguru so they appear in the log file
-    instead of leaking into the Textual TUI screen."""
-
-    def write(self, s: str) -> int:
-        if s.strip():
-            logger.debug(f"[mcp-stderr] {s.rstrip()}")
-        return len(s)
-
-    def flush(self) -> None:
-        pass
-
-
 class MCPClient:
-    def __init__(self, servers: dict):
+    def __init__(self, servers: dict, errlog: TextIO = sys.stderr):
+        # errlog is passed to stdio_client as the MCP subprocess stderr destination.
+        # TUI callers should pass open(os.devnull, 'w') to suppress server startup
+        # messages that would otherwise appear on the terminal behind Textual.
+        self._errlog = errlog
+        self._servers = servers
         self._servers = servers
         self._sessions: dict[str, ClientSession] = {}
         self._tool_to_server: dict[str, str] = {}
@@ -76,7 +69,7 @@ class MCPClient:
                         env=cfg.get("env"),
                     )
                     read, write = await self._stack.enter_async_context(
-                        stdio_client(params, errlog=_LoguruStderr())
+                        stdio_client(params, errlog=self._errlog)
                     )
                 session: ClientSession = await self._stack.enter_async_context(
                     ClientSession(read, write)

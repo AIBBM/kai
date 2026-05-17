@@ -356,7 +356,7 @@ class ChatApp(App[None]):
         if not servers:
             sidebar.set_mcp({})
             return
-        mcp = MCPClient(servers)
+        mcp = MCPClient(servers, errlog=open(os.devnull, "w"))
         try:
             await mcp.start()
             if not mcp.tool_names:
