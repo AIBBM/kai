@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 from functools import partial
 from pathlib import Path
@@ -37,6 +38,8 @@ logger.add(
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 PROMPT_HISTORY_FILE = Path(".prompt_history")
+# SGR mouse event pattern — leaks into Input when Playwright/WSLg resets terminal state
+_MOUSE_SEQ = re.compile(r"(?:\x1b)?\[<\d+;\d+;\d+[Mm]")
 
 
 def _load_prompt_history() -> list[str]:
@@ -428,13 +431,17 @@ class ChatApp(App[None]):
         prompt.cursor_position = len(prompt.value)
 
     def on_paste(self, event: events.Paste) -> None:
-        # Playwright/WSLg causes terminal mouse-tracking state to reset; on refocus
-        # SGR mouse events (ESC[<Pb;Px;PyM) arrive as "pasted" text. Drop them.
-        import re
-        if re.search(r"\[<\d+;\d+;\d+[Mm]", event.text):
+        if _MOUSE_SEQ.search(event.text):
             event.prevent_default()
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        # Strip SGR mouse sequences that leak in char-by-char when Playwright/WSLg
+        # resets terminal mouse-tracking state on window focus changes.
+        if _MOUSE_SEQ.search(event.value):
+            cleaned = _MOUSE_SEQ.sub("", event.value)
+            event.input.value = cleaned
+            event.input.cursor_position = len(cleaned)
+            return
         value = event.value
         overlay = self.query_one("#cmd-overlay", NavigableOptionList)
 

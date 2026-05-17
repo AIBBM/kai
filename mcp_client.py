@@ -134,7 +134,10 @@ class MCPClient:
         result = await session.call_tool(tool_name, arguments)
         parts = [item.text for item in result.content if hasattr(item, "text")]
         output = "\n".join(parts) or "[no output]"
-        logger.debug(f"MCP result [{tool_name}] isError={result.isError} len={len(output)}")
+        if result.isError:
+            logger.warning(f"MCP error [{tool_name}]: {output[:500]}")
+        else:
+            logger.debug(f"MCP result [{tool_name}] len={len(output)}")
         return output
 
 
