@@ -1,11 +1,14 @@
 """Textual TUI for qwen-agent.  Run: uv run python app.py"""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
 from functools import partial
 from pathlib import Path
+
+from rich.text import Text
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -20,10 +23,9 @@ from textual import work
 from loguru import logger
 
 from agent import Agent
-from config import MODEL
+from config import BASH_TIMEOUT, MODEL
 from models import REGISTRY
 from mcp_client import MCPClient, load_mcp_servers
-from tools import bash_exec
 
 logger.remove()
 logger.add(
@@ -366,9 +368,14 @@ class ChatApp(App[None]):
         logger.info(f"MCP 初始化完成：{mcp.tool_names}")
 
     async def on_unmount(self) -> None:
-        # MCPClient 用 AsyncExitStack 管理 stdio 子進程；不 stop 會留下孤兒進程
         if self.agent.mcp_client:
-            await self.agent.mcp_client.stop()
+            try:
+                await self.agent.mcp_client.stop()
+            except RuntimeError:
+                # anyio cancel scope must exit in the same task it was entered;
+                # mcp.start() ran in a worker task, on_unmount runs in a different task.
+                # Subprocesses are cleaned up by the OS when this process exits.
+                pass
 
     # ── 輸入事件 ──────────────────────────────────────────────────────────────
 
@@ -728,8 +735,30 @@ class ChatApp(App[None]):
         prompt.add_class("streaming")
         prompt.border_title = "⚙ 執行中..."
         try:
-            result = await bash_exec(cmd)
-            await msgs.mount(Static(result, markup=False, classes="bash-output"))
+            # Force ANSI color: commands (ls, git, grep…) check these vars before emitting codes
+            env = {
+                **os.environ,
+                "CLICOLOR_FORCE": "1",
+                "COLORTERM": "truecolor",
+                "TERM": "xterm-256color",
+                "COLUMNS": "120",
+            }
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=BASH_TIMEOUT)
+            out = stdout.decode(errors="replace").strip()
+            err = stderr.decode(errors="replace").strip()
+            parts = []
+            if out:
+                parts.append(out)
+            if err:
+                parts.append(f"[stderr]\n{err}")
+            raw = "\n".join(parts) or "(no output)"
+            await msgs.mount(Static(Text.from_ansi(raw), classes="bash-output"))
         except Exception as e:
             await msgs.mount(Static(f"❌ {e}", markup=False, classes="error-msg"))
         finally:
