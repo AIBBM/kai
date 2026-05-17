@@ -370,11 +370,11 @@ class ChatApp(App[None]):
     async def on_unmount(self) -> None:
         if self.agent.mcp_client:
             try:
-                await self.agent.mcp_client.stop()
-            except RuntimeError:
-                # anyio cancel scope must exit in the same task it was entered;
-                # mcp.start() ran in a worker task, on_unmount runs in a different task.
-                # Subprocesses are cleaned up by the OS when this process exits.
+                # Timeout prevents hang: anyio cancel scope was entered in the worker task
+                # but on_unmount runs in a different task, so stop() may never return.
+                # Subprocesses die with the process; 1.5s is enough for HTTP disconnect.
+                await asyncio.wait_for(self.agent.mcp_client.stop(), timeout=1.5)
+            except Exception:
                 pass
 
     # ── 輸入事件 ──────────────────────────────────────────────────────────────
