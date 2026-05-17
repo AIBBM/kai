@@ -398,6 +398,11 @@ class ChatApp(App[None]):
                 await asyncio.wait_for(self._mcp_task, timeout=2.0)
             except BaseException:
                 self._mcp_task.cancel()
+        # Strip dangling user message if interrupted mid-stream (no AI reply yet)
+        hist = self.agent.history
+        if hist and hist[-1]["role"] == "user":
+            hist.pop()
+        self.agent.save_history()
         self.exit()
 
     def on_unmount(self) -> None:
