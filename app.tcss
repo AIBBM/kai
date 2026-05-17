@@ -66,6 +66,14 @@
     margin: 1 0;
 }
 
+.bash-output {
+    border-left: thick $panel;
+    background: $surface;
+    color: $text;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
 /* ─── AI 回應 ─── */
 AIMessage {
     height: auto;

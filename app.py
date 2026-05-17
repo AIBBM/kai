@@ -23,6 +23,7 @@ from agent import Agent
 from config import MODEL
 from models import REGISTRY
 from mcp_client import MCPClient, load_mcp_servers
+from tools import bash_exec
 
 logger.remove()
 logger.add(
@@ -497,6 +498,12 @@ class ChatApp(App[None]):
         self._history_idx = -1
         self._history_draft = ""
 
+        if text.startswith("!"):
+            cmd = text[1:].strip()
+            if cmd:
+                self._run_bash(cmd)
+            return
+
         if text.startswith("/"):
             parts = text.split(maxsplit=1)
             cmd = parts[0].lower()
@@ -704,6 +711,32 @@ class ChatApp(App[None]):
             prompt.remove_class("streaming")
             self._update_prompt_title()
             prompt.disabled = False
+            prompt.placeholder = f"傳訊息給 {self.agent.profile.name}..."
+            prompt.focus()
+
+    # ── Bash 直接執行 ─────────────────────────────────────────────────────────
+
+    @work
+    async def _run_bash(self, cmd: str) -> None:
+        msgs   = self.query_one("#messages", VerticalScroll)
+        prompt = self.query_one("#prompt",   HistoryInput)
+        await msgs.mount(
+            Static(f"[bold]$[/bold] {cmd}", markup=True, classes="user-bubble")
+        )
+        msgs.scroll_end(animate=False)
+        prompt.disabled = True
+        prompt.add_class("streaming")
+        prompt.border_title = "⚙ 執行中..."
+        try:
+            result = await bash_exec(cmd)
+            await msgs.mount(Static(result, markup=False, classes="bash-output"))
+        except Exception as e:
+            await msgs.mount(Static(f"❌ {e}", markup=False, classes="error-msg"))
+        finally:
+            msgs.scroll_end(animate=False)
+            prompt.disabled = False
+            prompt.remove_class("streaming")
+            self._update_prompt_title()
             prompt.placeholder = f"傳訊息給 {self.agent.profile.name}..."
             prompt.focus()
 
