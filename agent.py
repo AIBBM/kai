@@ -303,11 +303,16 @@ class Agent:
             except ollama.ResponseError as e:
                 if live:
                     live.stop()
+                logger.error(f"模型串流錯誤：{e}")
+                if self.history and self.history[-1]["role"] == "user":
+                    self.history.pop()
+                if on_token:
+                    # TUI mode: re-raise so _send() can display an error widget
+                    raise
                 self.console.print(
                     f"[bold red]❌ 模型錯誤：{e}[/bold red]\n"
                     "[dim]請確認模型已下載（ollama pull <model>）並在 models.py 的 REGISTRY 中正確設定。[/dim]"
                 )
-                self.history.pop()
                 return
 
             if live:
