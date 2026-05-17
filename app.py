@@ -303,6 +303,8 @@ class ChatApp(App[None]):
         self._input_history: list[str] = _load_prompt_history()
         self._history_idx: int = -1
         self._history_draft: str = ""
+        self._mcp_task: asyncio.Task | None = None
+        self._mcp_done: asyncio.Event | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -338,40 +340,57 @@ class ChatApp(App[None]):
         self.query_one("#cmd-overlay", NavigableOptionList).border_title = "指令"
         # 每 15 秒輪詢 Git 狀態
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
-        self._init_mcp()
+        # start MCP in a dedicated asyncio task so start() and stop() share the same
+        # task context — anyio cancel scopes must enter and exit in the same task
+        self._mcp_done = asyncio.Event()
+        self._mcp_task = asyncio.get_event_loop().create_task(self._mcp_lifecycle())
 
-    @work
-    async def _init_mcp(self) -> None:
-        """背景初始化 MCP servers，完成後更新 sidebar 和 agent。"""
+    async def _mcp_lifecycle(self) -> None:
+        """Single long-lived asyncio task: MCP start → keep-alive → stop.
+
+        Keeping start() and stop() in the same task avoids anyio cross-task
+        cancel scope errors that occur when stop() is called from on_unmount.
+        """
         sidebar = self.query_one("#sidebar", Sidebar)
         servers = load_mcp_servers()
         if not servers:
             sidebar.set_mcp({})
             return
         mcp = MCPClient(servers)
-        await mcp.start()
-        if not mcp.tool_names:
-            sidebar.set_mcp({})
-            return
-        self.agent.mcp_client = mcp
-        self.agent.mcp_context = await _fetch_db_schema(mcp)
-        # 補充 filesystem 可存取路徑到 context
-        fs_paths = [
-            arg for name, cfg in servers.items()
-            if not name.startswith("_") and cfg.get("command") in ("npx", "node")
-            for arg in cfg.get("args", []) if arg.startswith("/")
-        ]
-        if fs_paths:
-            self.agent.mcp_context += f"\n檔案系統可存取目錄：{', '.join(fs_paths)}"
-        self.agent._reset_date()  # 重建 system prompt，注入 MCP 工具清單
-        sidebar.set_mcp(mcp.server_summary)
-        logger.info(f"MCP 初始化完成：{mcp.tool_names}")
+        try:
+            await mcp.start()
+            if not mcp.tool_names:
+                sidebar.set_mcp({})
+                return
+            self.agent.mcp_client = mcp
+            self.agent.mcp_context = await _fetch_db_schema(mcp)
+            # 補充 filesystem 可存取路徑到 context
+            fs_paths = [
+                arg for name, cfg in servers.items()
+                if not name.startswith("_") and cfg.get("command") in ("npx", "node")
+                for arg in cfg.get("args", []) if arg.startswith("/")
+            ]
+            if fs_paths:
+                self.agent.mcp_context += f"\n檔案系統可存取目錄：{', '.join(fs_paths)}"
+            self.agent._reset_date()  # 重建 system prompt，注入 MCP 工具清單
+            sidebar.set_mcp(mcp.server_summary)
+            logger.info(f"MCP 初始化完成：{mcp.tool_names}")
+            # Block until quit signal; stop() must run here in the same task
+            await self._mcp_done.wait()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self.agent.mcp_client = None
+            await mcp.stop()
 
-    def action_quit(self) -> None:
-        # Kill MCP stdio subprocesses before Textual's async shutdown sequence starts.
-        # Async stop() deadlocks across anyio task boundaries; sync kill avoids it.
-        if self.agent.mcp_client:
-            self.agent.mcp_client.force_kill()
+    async def action_quit(self) -> None:
+        if self._mcp_done:
+            self._mcp_done.set()
+        if self._mcp_task and not self._mcp_task.done():
+            try:
+                await asyncio.wait_for(self._mcp_task, timeout=2.0)
+            except BaseException:
+                self._mcp_task.cancel()
         self.exit()
 
     def on_unmount(self) -> None:
