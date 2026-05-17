@@ -427,6 +427,13 @@ class ChatApp(App[None]):
             prompt.value = self._input_history[-(self._history_idx + 1)]
         prompt.cursor_position = len(prompt.value)
 
+    def on_paste(self, event: events.Paste) -> None:
+        # Playwright/WSLg causes terminal mouse-tracking state to reset; on refocus
+        # SGR mouse events (ESC[<Pb;Px;PyM) arrive as "pasted" text. Drop them.
+        import re
+        if re.search(r"\[<\d+;\d+;\d+[Mm]", event.text):
+            event.prevent_default()
+
     def on_input_changed(self, event: Input.Changed) -> None:
         value = event.value
         overlay = self.query_one("#cmd-overlay", NavigableOptionList)
