@@ -741,12 +741,19 @@ class ChatApp(App[None]):
                 if at_bot:
                     msgs.scroll_end(animate=False)
 
+            async def on_retry() -> None:
+                nonlocal stream_msg, buf
+                buf.clear()
+                if stream_msg:
+                    await stream_msg.update_content("")
+
             await self.agent.chat(
                 {"role": "user", "content": text},
                 on_token=on_token,
                 on_thinking=on_thinking,
                 on_done=on_done,
                 on_tool_call=on_tool_call,
+                on_retry=on_retry,
             )
             if stream_msg and buf:
                 await stream_msg.update_content("".join(buf), final=True)

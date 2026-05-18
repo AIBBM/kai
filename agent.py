@@ -219,7 +219,7 @@ class Agent:
             )
         )
 
-    async def chat(self, user_msg: dict, on_token=None, on_thinking=None, on_done=None, on_tool_call=None):
+    async def chat(self, user_msg: dict, on_token=None, on_thinking=None, on_done=None, on_tool_call=None, on_retry=None):
         """
         單輪對話入口，支援 tool calling loop：
           1. 呼叫模型（stream）
@@ -252,80 +252,97 @@ class Agent:
             t_start = time.perf_counter()
             t_thinking_end: float | None = None
             last_chunk = None
-            try:
-                stream = await self._ollama.chat(
-                    model=self.profile.name,
-                    messages=messages,
-                    think=self.profile.supports_thinking,  # 依 profile 開關
-                    tools=active_tools,
-                    stream=True,
-                    options={
-                        "num_ctx": self.profile.num_ctx,
-                        "temperature": TEMPERATURE,
-                        "top_k": TOP_K,
-                        "top_p": TOP_P,
-                    },
-                )
-            except httpx.ConnectError:
-                self.console.print(
-                    "[bold red]❌ 無法連線 Ollama，請確認服務正常運行。[/bold red]"
-                )
-                self.history.pop()
-                return
 
-            live: "Live | None" = None
-            try:
-                async for chunk in stream:
-                    if self._cancelled:
-                        break
-                    msg = chunk.message
-                    last_chunk = chunk
-
-                    if msg.thinking:
-                        thinking_parts.append(clean_thinking(msg.thinking))
-
-                    if msg.content:
-                        if not reply_parts:
-                            if thinking_parts:
-                                t_thinking_end = time.perf_counter()
-                                if on_thinking:
-                                    await on_thinking("".join(thinking_parts))
-                                else:
-                                    self._render_thinking("".join(thinking_parts))
-                            if not on_token:
-                                self.console.print(
-                                    Rule("[bold green]🤖 AI[/bold green]", style="green")
-                                )
-                                live = Live(
-                                    Markdown(""),
-                                    console=self.console,
-                                    transient=True,
-                                    refresh_per_second=7,
-                                    vertical_overflow="crop",
-                                )
-                                live.start()
-                        reply_parts.append(msg.content)
-                        if on_token:
-                            await on_token(msg.content)
-                        elif live:
-                            live.update(Markdown("".join(reply_parts)))
-
-                    for tc in msg.tool_calls or []:
-                        tool_calls.append(tc)
-            except ollama.ResponseError as e:
-                if live:
-                    live.stop()
-                logger.error(f"模型串流錯誤：{e}")
-                if self.history and self.history[-1]["role"] == "user":
+            # inner retry loop — only for transient XML parse errors from Ollama
+            _xml_retry = 0
+            _XML_RETRY_MAX = 2
+            while True:
+                try:
+                    stream = await self._ollama.chat(
+                        model=self.profile.name,
+                        messages=messages,
+                        think=self.profile.supports_thinking,  # 依 profile 開關
+                        tools=active_tools,
+                        stream=True,
+                        options={
+                            "num_ctx": self.profile.num_ctx,
+                            "temperature": TEMPERATURE,
+                            "top_k": TOP_K,
+                            "top_p": TOP_P,
+                        },
+                    )
+                except httpx.ConnectError:
+                    self.console.print(
+                        "[bold red]❌ 無法連線 Ollama，請確認服務正常運行。[/bold red]"
+                    )
                     self.history.pop()
-                if on_token:
-                    # TUI mode: re-raise so _send() can display an error widget
-                    raise
-                self.console.print(
-                    f"[bold red]❌ 模型錯誤：{e}[/bold red]\n"
-                    "[dim]請確認模型已下載（ollama pull <model>）並在 models.py 的 REGISTRY 中正確設定。[/dim]"
-                )
-                return
+                    return
+
+                live: "Live | None" = None
+                try:
+                    async for chunk in stream:
+                        if self._cancelled:
+                            break
+                        msg = chunk.message
+                        last_chunk = chunk
+
+                        if msg.thinking:
+                            thinking_parts.append(clean_thinking(msg.thinking))
+
+                        if msg.content:
+                            if not reply_parts:
+                                if thinking_parts:
+                                    t_thinking_end = time.perf_counter()
+                                    if on_thinking:
+                                        await on_thinking("".join(thinking_parts))
+                                    else:
+                                        self._render_thinking("".join(thinking_parts))
+                                if not on_token:
+                                    self.console.print(
+                                        Rule("[bold green]🤖 AI[/bold green]", style="green")
+                                    )
+                                    live = Live(
+                                        Markdown(""),
+                                        console=self.console,
+                                        transient=True,
+                                        refresh_per_second=7,
+                                        vertical_overflow="crop",
+                                    )
+                                    live.start()
+                            reply_parts.append(msg.content)
+                            if on_token:
+                                await on_token(msg.content)
+                            elif live:
+                                live.update(Markdown("".join(reply_parts)))
+
+                        for tc in msg.tool_calls or []:
+                            tool_calls.append(tc)
+                    break  # stream completed without error — exit inner retry loop
+
+                except ollama.ResponseError as e:
+                    if live:
+                        live.stop()
+                    # Ollama XML parser bug (qwen tool-call output): retry transparently
+                    if "XML syntax error" in str(e) and _xml_retry < _XML_RETRY_MAX:
+                        _xml_retry += 1
+                        logger.warning(f"XML 解析錯誤，第 {_xml_retry}/{_XML_RETRY_MAX} 次重試：{e}")
+                        reply_parts.clear()
+                        tool_calls.clear()
+                        thinking_parts.clear()
+                        if on_retry:
+                            await on_retry()
+                        continue  # retry inner loop
+                    logger.error(f"模型串流錯誤：{e}")
+                    if self.history and self.history[-1]["role"] == "user":
+                        self.history.pop()
+                    if on_token:
+                        # TUI mode: re-raise so _send() can display an error widget
+                        raise
+                    self.console.print(
+                        f"[bold red]❌ 模型錯誤：{e}[/bold red]\n"
+                        "[dim]請確認模型已下載（ollama pull <model>）並在 models.py 的 REGISTRY 中正確設定。[/dim]"
+                    )
+                    return
 
             if live:
                 live.stop()
