@@ -141,7 +141,7 @@ AIMessage.select-mode .ta-view {
 
 /* ─── 輸入列 ─── */
 #input-row {
-    height: auto;
+    height: 5;
     align: left middle;
 }
 
@@ -162,6 +162,7 @@ AIMessage.select-mode .ta-view {
 }
 
 #prompt {
+    width: 1fr;
     border: round $primary;
     margin: 0 1 1 1;
     background: $boost;
