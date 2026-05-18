@@ -4,9 +4,11 @@ import os
 import re
 import time
 from datetime import datetime
+from types import SimpleNamespace
 
 import httpx
 import ollama
+from openai import AsyncOpenAI
 from loguru import logger
 from rich import box
 from rich.live import Live
@@ -17,6 +19,7 @@ from rich.rule import Rule
 from rich.table import Table
 
 from config import (
+    GEMINI_API_KEY,
     HISTORY_FILE,
     HISTORY_KEEP,
     MAX_SEARCH_CHARS,
@@ -59,6 +62,14 @@ class Agent:
         self.mcp_context: str = ""
         self._cancelled = False
         self._ollama = ollama.AsyncClient()
+        self._gemini: AsyncOpenAI | None = (
+            AsyncOpenAI(
+                api_key=GEMINI_API_KEY,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            )
+            if GEMINI_API_KEY
+            else None
+        )
         self._reset_date()
         self._load_history()
 
@@ -227,6 +238,139 @@ class Agent:
             )
         )
 
+    def _start_live(self) -> "Live":
+        self.console.print(Rule("[bold green]🤖 AI[/bold green]", style="green"))
+        live = Live(Markdown(""), console=self.console, transient=True, refresh_per_second=7, vertical_overflow="crop")
+        live.start()
+        return live
+
+    async def _stream_ollama(
+        self, messages, active_tools, reply_parts, tool_calls, thinking_parts,
+        on_token, on_thinking, on_retry,
+    ) -> "Live | None":
+        """Ollama 串流，含 XML 解析錯誤自動重試。回傳 Live（CLI 模式）或 None。"""
+        _xml_retry = 0
+        _XML_RETRY_MAX = 2
+        while True:
+            try:
+                stream = await self._ollama.chat(
+                    model=self.profile.name,
+                    messages=messages,
+                    think=self.profile.supports_thinking,
+                    tools=active_tools,
+                    stream=True,
+                    options={"num_ctx": self.profile.num_ctx, "temperature": TEMPERATURE, "top_k": TOP_K, "top_p": TOP_P},
+                )
+            except httpx.ConnectError:
+                self.console.print("[bold red]❌ 無法連線 Ollama，請確認服務正常運行。[/bold red]")
+                raise
+
+            live: "Live | None" = None
+            try:
+                async for chunk in stream:
+                    if self._cancelled:
+                        break
+                    msg = chunk.message
+                    self._last_usage = (getattr(chunk, "eval_count", None), getattr(chunk, "prompt_eval_count", None))
+
+                    if msg.thinking:
+                        thinking_parts.append(clean_thinking(msg.thinking))
+
+                    if msg.content:
+                        if not reply_parts:
+                            if thinking_parts:
+                                self._t_thinking_end = time.perf_counter()
+                                if on_thinking:
+                                    await on_thinking("".join(thinking_parts))
+                                else:
+                                    self._render_thinking("".join(thinking_parts))
+                            if not on_token:
+                                live = self._start_live()
+                        reply_parts.append(msg.content)
+                        if on_token:
+                            await on_token(msg.content)
+                        elif live:
+                            live.update(Markdown("".join(reply_parts)))
+
+                    for tc in msg.tool_calls or []:
+                        tool_calls.append(tc)
+                return live
+
+            except ollama.ResponseError as e:
+                if live:
+                    live.stop()
+                if "XML syntax error" in str(e) and _xml_retry < _XML_RETRY_MAX:
+                    _xml_retry += 1
+                    logger.warning(f"XML 解析錯誤，第 {_xml_retry}/{_XML_RETRY_MAX} 次重試：{e}")
+                    reply_parts.clear()
+                    tool_calls.clear()
+                    thinking_parts.clear()
+                    if on_retry:
+                        await on_retry()
+                    continue
+                raise
+
+    async def _stream_gemini(
+        self, messages, active_tools, reply_parts, tool_calls, thinking_parts,
+        on_token, on_thinking,
+    ) -> "Live | None":
+        """Gemini 串流（OpenAI-compatible endpoint）。"""
+        from openai import NOT_GIVEN
+        stream = await self._gemini.chat.completions.create(
+            model=self.profile.name,
+            messages=messages,
+            tools=active_tools or NOT_GIVEN,
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+        _tc_buf: dict[int, dict] = {}
+        live: "Live | None" = None
+
+        async for chunk in stream:
+            if self._cancelled:
+                break
+            if chunk.usage:
+                self._last_usage = (chunk.usage.completion_tokens, chunk.usage.prompt_tokens)
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+
+            if delta.content:
+                if not reply_parts:
+                    if thinking_parts:
+                        self._t_thinking_end = time.perf_counter()
+                        if on_thinking:
+                            await on_thinking("".join(thinking_parts))
+                        else:
+                            self._render_thinking("".join(thinking_parts))
+                    if not on_token:
+                        live = self._start_live()
+                reply_parts.append(delta.content)
+                if on_token:
+                    await on_token(delta.content)
+                elif live:
+                    live.update(Markdown("".join(reply_parts)))
+
+            for tc_chunk in (delta.tool_calls or []):
+                i = tc_chunk.index
+                if i not in _tc_buf:
+                    _tc_buf[i] = {"id": tc_chunk.id or "", "name": "", "args": ""}
+                if tc_chunk.function:
+                    _tc_buf[i]["name"] += tc_chunk.function.name or ""
+                    _tc_buf[i]["args"] += tc_chunk.function.arguments or ""
+
+        for idx in sorted(_tc_buf):
+            d = _tc_buf[idx]
+            tc = SimpleNamespace(
+                id=d["id"],
+                function=SimpleNamespace(name=d["name"], arguments=d["args"]),
+            )
+            tool_calls.append(tc)
+        return live
+
     async def chat(self, user_msg: dict, on_token=None, on_thinking=None, on_done=None, on_tool_call=None, on_retry=None):
         """
         單輪對話入口，支援 tool calling loop：
@@ -252,105 +396,38 @@ class Agent:
         if self.profile.supports_tools and self.mcp_client:
             active_tools.extend(self.mcp_client.tools)
 
+        self._last_usage: tuple = (None, None)
+        self._t_thinking_end: float | None = None
         tool_call_count = 0
         while True:
             reply_parts: list[str] = []
-            tool_calls: list = []  # 用 list 保留所有 tool call，同名工具不會互覆
+            tool_calls: list = []
             thinking_parts: list[str] = []
             t_start = time.perf_counter()
-            t_thinking_end: float | None = None
-            last_chunk = None
+            self._t_thinking_end = None
 
-            # inner retry loop — only for transient XML parse errors from Ollama
-            _xml_retry = 0
-            _XML_RETRY_MAX = 2
-            while True:
-                try:
-                    stream = await self._ollama.chat(
-                        model=self.profile.name,
-                        messages=messages,
-                        think=self.profile.supports_thinking,  # 依 profile 開關
-                        tools=active_tools,
-                        stream=True,
-                        options={
-                            "num_ctx": self.profile.num_ctx,
-                            "temperature": TEMPERATURE,
-                            "top_k": TOP_K,
-                            "top_p": TOP_P,
-                        },
+            live: "Live | None" = None
+            try:
+                if self.profile.backend == "gemini":
+                    live = await self._stream_gemini(
+                        messages, active_tools, reply_parts, tool_calls, thinking_parts,
+                        on_token, on_thinking,
                     )
-                except httpx.ConnectError:
-                    self.console.print(
-                        "[bold red]❌ 無法連線 Ollama，請確認服務正常運行。[/bold red]"
+                else:
+                    live = await self._stream_ollama(
+                        messages, active_tools, reply_parts, tool_calls, thinking_parts,
+                        on_token, on_thinking, on_retry,
                     )
+            except Exception as e:
+                if live:
+                    live.stop()
+                logger.error(f"模型串流錯誤：{e}")
+                if self.history and self.history[-1]["role"] == "user":
                     self.history.pop()
-                    return
-
-                live: "Live | None" = None
-                try:
-                    async for chunk in stream:
-                        if self._cancelled:
-                            break
-                        msg = chunk.message
-                        last_chunk = chunk
-
-                        if msg.thinking:
-                            thinking_parts.append(clean_thinking(msg.thinking))
-
-                        if msg.content:
-                            if not reply_parts:
-                                if thinking_parts:
-                                    t_thinking_end = time.perf_counter()
-                                    if on_thinking:
-                                        await on_thinking("".join(thinking_parts))
-                                    else:
-                                        self._render_thinking("".join(thinking_parts))
-                                if not on_token:
-                                    self.console.print(
-                                        Rule("[bold green]🤖 AI[/bold green]", style="green")
-                                    )
-                                    live = Live(
-                                        Markdown(""),
-                                        console=self.console,
-                                        transient=True,
-                                        refresh_per_second=7,
-                                        vertical_overflow="crop",
-                                    )
-                                    live.start()
-                            reply_parts.append(msg.content)
-                            if on_token:
-                                await on_token(msg.content)
-                            elif live:
-                                live.update(Markdown("".join(reply_parts)))
-
-                        for tc in msg.tool_calls or []:
-                            tool_calls.append(tc)
-                    break  # stream completed without error — exit inner retry loop
-
-                except ollama.ResponseError as e:
-                    if live:
-                        live.stop()
-                    # Ollama XML parser bug (qwen tool-call output): retry transparently
-                    if "XML syntax error" in str(e) and _xml_retry < _XML_RETRY_MAX:
-                        _xml_retry += 1
-                        logger.warning(f"XML 解析錯誤，第 {_xml_retry}/{_XML_RETRY_MAX} 次重試：{e}")
-                        reply_parts.clear()
-                        tool_calls.clear()
-                        thinking_parts.clear()
-                        if on_retry:
-                            await on_retry()
-                        continue  # retry inner loop
-                    logger.error(f"模型串流錯誤：{e}")
-                    if self.history and self.history[-1]["role"] == "user":
-                        self.history.pop()
-                    if on_token:
-                        # TUI mode: re-raise so _send() can display an error widget
-                        raise
-                    self.console.print(
-                        f"[bold red]❌ 模型錯誤：{e}[/bold red]\n"
-                        "[dim]請確認模型已下載（ollama pull <model>）並在 models.py 的 REGISTRY 中正確設定。[/dim]"
-                    )
-                    return
+                if on_token:
+                    raise
+                self.console.print(f"[bold red]❌ 模型錯誤：{e}[/bold red]")
+                return
 
             if live:
                 live.stop()
@@ -362,18 +439,14 @@ class Agent:
                     self.history.pop()
                 return
 
-            # 串流結束：transient 已清除 Live 區域，以 Markdown 重繪完整輸出（Rich 模式）
             if reply_parts and not on_token:
                 self.console.print(Markdown("".join(reply_parts)))
 
             t_total = time.perf_counter() - t_start
-            usage = (
-                getattr(last_chunk, "eval_count", None),
-                getattr(last_chunk, "prompt_eval_count", None),
-            )
-            if t_thinking_end:
+            usage = self._last_usage
+            if self._t_thinking_end:
                 logger.debug(
-                    f"思考 {t_thinking_end - t_start:.2f}s，總耗時 {t_total:.2f}s "
+                    f"思考 {self._t_thinking_end - t_start:.2f}s，總耗時 {t_total:.2f}s "
                     f"| 生成 {usage[0]} tokens，輸入 {usage[1]} tokens"
                 )
             else:
@@ -388,24 +461,42 @@ class Agent:
                     if self.history and self.history[-1]["role"] == "user":
                         self.history.pop()
                     if on_done:
-                        await on_done(t_total, t_thinking_end and t_thinking_end - t_start, usage[0], usage[1])
+                        await on_done(t_total, self._t_thinking_end and self._t_thinking_end - t_start, usage[0], usage[1])
                     return
                 self.history.append(
                     {"role": "assistant", "content": "".join(reply_parts)}
                 )
                 self._rotate_history()
-                self.save_history()  # 每輪就儲存，避免 crash 遺失
+                self.save_history()
                 if on_done:
-                    await on_done(t_total, t_thinking_end and t_thinking_end - t_start, usage[0], usage[1])
+                    await on_done(t_total, self._t_thinking_end and self._t_thinking_end - t_start, usage[0], usage[1])
                 return
 
-            messages.append(
-                {
+            # Build assistant message with tool calls (format differs by backend)
+            if self.profile.backend == "gemini":
+                messages.append({
+                    "role": "assistant",
+                    "content": "".join(reply_parts) or None,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                                if isinstance(tc.function.arguments, str)
+                                else json.dumps(tc.function.arguments, ensure_ascii=False),
+                            },
+                        }
+                        for tc in tool_calls
+                    ],
+                })
+            else:
+                messages.append({
                     "role": "assistant",
                     "content": "".join(reply_parts),
                     "tool_calls": tool_calls,
-                }
-            )
+                })
 
             with self.console.status(
                 "[bold cyan]正在執行工具...[/bold cyan]", spinner="dots"
@@ -417,7 +508,6 @@ class Agent:
                     ]
                 )
 
-            # on_tool_call provided → TUI handles display; else → Rich console rendering
             if on_tool_call:
                 for tc, (fn_name, result) in zip(tool_calls, results):
                     args = dict(getattr(tc.function, "arguments", {}))
@@ -430,14 +520,21 @@ class Agent:
                 for fn_name, result in other_results:
                     self._render_mcp_result(fn_name, result)
 
-            for fn_name, result in results:
-                messages.append(
-                    {
+            # Tool result messages (format differs by backend)
+            if self.profile.backend == "gemini":
+                for tc, (fn_name, result) in zip(tool_calls, results):
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": self._trim_tool_result(result),
+                    })
+            else:
+                for fn_name, result in results:
+                    messages.append({
                         "role": "tool",
                         "content": self._trim_tool_result(result),
                         "name": fn_name,
-                    }
-                )
+                    })
 
             tool_call_count += 1
             if tool_call_count >= MAX_TOOL_CALLS:

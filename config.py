@@ -23,6 +23,7 @@ BASH_TIMEOUT = int(os.getenv("BASH_TIMEOUT", "30"))  # bash_exec 預設超時秒
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.6"))  # 生成溫度（0=確定性，1=創意）
 TOP_K = int(os.getenv("TOP_K", "20"))                 # top-k 採樣（0=停用）
 TOP_P = float(os.getenv("TOP_P", "0.95"))             # nucleus sampling
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")      # Google Gemini API key
 
 # 只輸出 DEBUG 以上的 log 到 stderr，不干擾 stdout 的對話輸出
 logger.remove()
