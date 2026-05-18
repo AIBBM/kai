@@ -109,7 +109,7 @@ class Agent:
                     "\n\n### 執行與排錯原則"
                     "\n- 複雜任務請逐步完成：網頁操作需先確認頁面已載入，再進行點擊或截圖。"
                     "\n- 嚴禁捏造：回答必須基於工具回傳的真實資料，工具失敗時誠實告知，不得編造結果。"
-                    "\n- 選擇器排錯：selector 找不到元素時，**必須立即呼叫 `browser_snapshot`** 觀察頁面實際結構，再從中選擇正確的元素描述或 ref，嚴禁用相同 selector 重複重試。"
+                    "\n- 選擇器排錯：selector 找不到元素時，**必須立即呼叫 `browser_snapshot`（不要帶 filename 參數）**，閱讀回傳的頁面結構，再從中找正確的元素 ref 或描述，嚴禁用相同 selector 重複重試。"
                     "\n- 截圖參數：`browser_take_screenshot` 的 `type` 參數只接受 `\"png\"` 或 `\"jpeg\"`，不需要時可省略；不可傳其他值。"
                     "\n- 任務收尾：完成任務後，必須用文字清楚告知最終結果與狀態，不得無聲結束。"
                     if self.mcp_client and self.mcp_client.tool_names
@@ -315,16 +315,20 @@ class Agent:
         on_token, on_thinking,
     ) -> "Live | None":
         """Gemini 串流（OpenAI-compatible endpoint）。"""
-        from openai import NOT_GIVEN
-        stream = await self._gemini.chat.completions.create(
-            model=self.profile.name,
-            messages=messages,
-            tools=active_tools or NOT_GIVEN,
-            temperature=TEMPERATURE,
-            top_p=TOP_P,
-            stream=True,
-            stream_options={"include_usage": True},
-        )
+        from openai import NOT_GIVEN, RateLimitError
+        try:
+            stream = await self._gemini.chat.completions.create(
+                model=self.profile.name,
+                messages=messages,
+                tools=active_tools or NOT_GIVEN,
+                temperature=TEMPERATURE,
+                top_p=TOP_P,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+        except RateLimitError as e:
+            logger.warning(f"Gemini 配額不足：{e}")
+            raise RuntimeError(f"❌ Gemini 配額已用盡，請稍後再試或升級至付費方案。\n{e}") from e
 
         _tc_buf: dict[int, dict] = {}
         live: "Live | None" = None
