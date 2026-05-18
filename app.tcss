@@ -140,6 +140,27 @@ AIMessage.select-mode .ta-view {
 }
 
 /* ─── 輸入列 ─── */
+#input-row {
+    height: auto;
+    align: left middle;
+}
+
+#think-btn {
+    width: 5;
+    height: 3;
+    min-width: 5;
+    margin: 0 1 1 0;
+    background: $surface;
+    border: tall $panel;
+    color: $text-muted;
+}
+
+#think-btn.think-on {
+    background: $warning-darken-2;
+    border: tall $warning;
+    color: $warning;
+}
+
 #prompt {
     border: round $primary;
     margin: 0 1 1 1;

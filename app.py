@@ -243,6 +243,16 @@ class CopyButton(Button):
             self.app.notify("複製失敗（需要 xclip 或 clip.exe）", severity="warning")
 
 
+class ThinkButton(Button):
+    """輸入列旁的 Thinking 開關按鈕。"""
+
+    def __init__(self) -> None:
+        super().__init__("💡", id="think-btn", tooltip="切換 Thinking 模式")
+
+    def on_button_pressed(self) -> None:
+        self.app.action_toggle_think()
+
+
 class AIMessage(Widget):
     """AI 回應：預設 Markdown 渲染，右鍵切換 TextArea 選取模式。"""
 
@@ -349,6 +359,7 @@ class ChatApp(App[None]):
         self._spin_label = "生成中"
         self._context_files: list[tuple[str, str]] = []  # (path, content)
         self._debug_tools = False
+        self._think_override: bool | None = None  # None = 依 profile 預設
         self._input_history: list[str] = _load_prompt_history()
         self._history_idx: int = -1
         self._history_draft: str = ""
@@ -368,7 +379,9 @@ class ChatApp(App[None]):
                 )
             yield Sidebar(id="sidebar")
         yield NavigableOptionList(id="cmd-overlay")
-        yield HistoryInput(placeholder=f"傳訊息給 {MODEL}...", id="prompt")
+        with Horizontal(id="input-row"):
+            yield HistoryInput(placeholder=f"傳訊息給 {MODEL}...", id="prompt")
+            yield ThinkButton()
         yield Footer()
 
     def on_mount(self) -> None:
@@ -383,6 +396,7 @@ class ChatApp(App[None]):
                 ("/add",   "加入檔案到上下文  /add <路徑>"),
                 ("/del",   "移除上下文檔案  /del <路徑>"),
                 ("/debug", "切換工具除錯模式（顯示工具參數與回應）"),
+                ("/think", "切換 Thinking 模式開／關"),
             ]
             + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
         )
@@ -619,6 +633,8 @@ class ChatApp(App[None]):
                 label = "🔧 開啟" if self._debug_tools else "關閉"
                 self.notify(f"工具除錯模式：{label}", severity="information", timeout=3)
                 self._update_prompt_title()
+            elif cmd == "/think":
+                self.action_toggle_think()
             else:
                 self.notify(f"未知指令：{cmd}", severity="warning")
             return
@@ -668,6 +684,20 @@ class ChatApp(App[None]):
         base = "Duncan ❯"
         suffix = "  [bold yellow]🔧 debug[/bold yellow]" if self._debug_tools else ""
         self.query_one("#prompt", HistoryInput).border_title = base + suffix
+
+    def _thinking_active(self) -> bool:
+        """目前是否啟用 thinking（override 優先，否則依 profile）。"""
+        if self._think_override is not None:
+            return self._think_override
+        return self.agent.profile.supports_thinking
+
+    def action_toggle_think(self) -> None:
+        current = self._thinking_active()
+        self._think_override = not current
+        btn = self.query_one("#think-btn", ThinkButton)
+        btn.add_class("think-on") if self._think_override else btn.remove_class("think-on")
+        label = "開啟 💡" if self._think_override else "關閉"
+        self.notify(f"Thinking：{label}", severity="information", timeout=2)
 
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#sidebar", Sidebar)
@@ -796,6 +826,7 @@ class ChatApp(App[None]):
                 if stream_msg:
                     await stream_msg.update_content("")
 
+            self.agent.profile.supports_thinking = self._thinking_active()
             await self.agent.chat(
                 {"role": "user", "content": text},
                 on_token=on_token,
