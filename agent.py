@@ -510,7 +510,8 @@ class Agent:
 
             if on_tool_call:
                 for tc, (fn_name, result) in zip(tool_calls, results):
-                    args = dict(getattr(tc.function, "arguments", {}))
+                    raw = getattr(tc.function, "arguments", {})
+                    args = json.loads(raw) if isinstance(raw, str) else dict(raw)
                     await on_tool_call(fn_name, args, result)
             else:
                 web_results = [(fn, r) for fn, r in results if fn == "web_search"]
