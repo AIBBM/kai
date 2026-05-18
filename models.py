@@ -77,7 +77,7 @@ REGISTRY: dict[str, ModelProfile] = {
         "qwen2.5-coder:7b",
         supports_thinking=False,
         supports_vision=False,
-        supports_tools=True,
+        supports_tools=False,  # Ollama template 不支援 function calling，tool call 會輸出為純文字
         num_ctx=16384,
     ),
     # ── Gemini (Google API) ──────────────────────────────────────────────────
