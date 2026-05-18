@@ -93,6 +93,7 @@ class Agent:
                     "\n- 檔案讀寫 → 只用 filesystem MCP 工具（read_file / write_file / list_directory 等），不得用 bash cat / ls / cp。"
                     "\n- bash_exec 僅用於 MCP 無法涵蓋的純系統操作（如 git、uv、ping）。"
                     "\n遇到相關要求直接呼叫對應 MCP 工具，不要說『請提供內容』或自行安裝套件。"
+                    "\n完成任務後務必用文字告知使用者結果（例如截圖儲存路徑、操作是否成功），不得無聲結束。"
                     if self.mcp_client and self.mcp_client.tool_names
                     else ""
                 )

@@ -707,6 +707,9 @@ class ChatApp(App[None]):
             async def on_done(elapsed, thinking_s, gen_tok, prompt_tok) -> None:
                 if stream_msg:
                     await stream_msg.update_content("".join(buf), final=True)
+                elif not buf:
+                    # Model completed with no text output (tool-only turn)
+                    await msgs.mount(Static("🤖 [dim]（已完成，無文字回覆）[/dim]", markup=True, classes="ai-header"))
                 parts: list[str] = []
                 if thinking_s:
                     parts.append(f"思考 {thinking_s:.1f}s")
