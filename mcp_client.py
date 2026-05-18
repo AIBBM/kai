@@ -63,10 +63,12 @@ class MCPClient:
                         streamable_http_client(url, http_client=http_client)
                     )
                 else:
+                    cfg_env = cfg.get("env")
+                    merged_env = {**os.environ, **cfg_env} if cfg_env else None
                     params = StdioServerParameters(
                         command=cfg["command"],
                         args=cfg.get("args", []),
-                        env=cfg.get("env"),
+                        env=merged_env,
                     )
                     read, write = await self._stack.enter_async_context(
                         stdio_client(params, errlog=self._errlog)
