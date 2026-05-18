@@ -157,3 +157,20 @@ AIMessage.select-mode .ta-view {
     border: round $warning;
     border-title-color: $warning;
 }
+
+/* ─── 程式碼複製按鈕 ─── */
+.copy-btn {
+    dock: right;
+    width: 3;
+    height: 1;
+    min-width: 3;
+    background: transparent;
+    border: none;
+    color: $text-muted;
+    padding: 0;
+}
+
+.copy-btn:hover {
+    background: $primary-background;
+    color: $accent;
+}

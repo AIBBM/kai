@@ -18,7 +18,7 @@ from textual.containers import Horizontal, VerticalScroll
 from textual import events
 from textual.events import Click
 from textual.widget import Widget
-from textual.widgets import Collapsible, Footer, Header, Input, Markdown, OptionList, Static, TextArea
+from textual.widgets import Button, Collapsible, Footer, Header, Input, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 from textual import work
 from loguru import logger
@@ -211,6 +211,37 @@ class Sidebar(Widget):
         self.query_one("#sb-mcp", Static).update(text)
 
 
+def _copy_to_clipboard(text: str) -> bool:
+    """複製文字到剪貼簿。依序嘗試 xclip → clip.exe（WSL）。"""
+    try:
+        subprocess.run(["xclip", "-selection", "clipboard"],
+                       input=text.encode(), check=True, capture_output=True)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+    try:
+        subprocess.run(["clip.exe"],
+                       input=text.encode("utf-16-le"), check=True, capture_output=True)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+    return False
+
+
+class CopyButton(Button):
+    """程式碼區塊右上角的複製按鈕。"""
+
+    def __init__(self, code: str) -> None:
+        super().__init__("⎘", classes="copy-btn")
+        self._code = code
+
+    def on_button_pressed(self) -> None:
+        if _copy_to_clipboard(self._code):
+            self.app.notify("已複製", timeout=1.5)
+        else:
+            self.app.notify("複製失敗（需要 xclip 或 clip.exe）", severity="warning")
+
+
 class AIMessage(Widget):
     """AI 回應：預設 Markdown 渲染，右鍵切換 TextArea 選取模式。"""
 
@@ -235,6 +266,16 @@ class AIMessage(Widget):
             ta = self.query_one(".ta-view", TextArea)
             ta.text = text
             ta.styles.height = max(4, min(_line_height(text) + 1, 50))
+            await self._add_copy_buttons()
+
+    async def _add_copy_buttons(self) -> None:
+        from textual.widgets._markdown import MarkdownFence
+        md = self.query_one(".md-view", Markdown)
+        for fence in md.query(MarkdownFence):
+            if fence.query(CopyButton):
+                continue
+            if fence.code:
+                await fence.mount(CopyButton(fence.code))
 
     def on_click(self, event: Click) -> None:
         if event.button != 3:
