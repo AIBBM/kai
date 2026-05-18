@@ -86,15 +86,18 @@ class Agent:
                     else ""
                 )
                 + (
-                    f"\n\n你還有以下 MCP 工具：{', '.join(self.mcp_client.tool_names)}。"
-                    f"目前工作目錄：{os.getcwd()}。"
-                    "\n工具優先順序（必須遵守）："
-                    "\n- 瀏覽器操作 → 只用 playwright MCP 工具（browser_navigate / browser_click 等），絕對不得用 bash 執行 node / npx / playwright CLI。"
-                    "\n- 檔案讀寫 → 只用 filesystem MCP 工具（read_file / write_file / list_directory 等），不得用 bash cat / ls / cp。"
-                    "\n- bash_exec 僅用於 MCP 無法涵蓋的純系統操作（如 git、uv、ping）。"
-                    "\n- 絕對禁止用 bash 執行 npm install / npx / node，不得在專案目錄安裝任何 npm 套件。"
-                    "\n遇到相關要求直接呼叫對應 MCP 工具，不要說『請提供內容』或自行安裝套件。"
-                    "\n完成任務後務必用文字告知使用者結果（例如截圖儲存路徑、操作是否成功），不得無聲結束。"
+                    f"\n\n## MCP 工具"
+                    f"\n目前工作目錄：{os.getcwd()}。"
+                    "\n你已連接檔案系統與瀏覽器等 MCP 工具，請依據任務直接呼叫，工具清單已內建於系統，無需重複列舉。"
+                    "\n\n### 工具優先順序（必須遵守）"
+                    "\n- 瀏覽器操作 → 只用 playwright MCP（browser_navigate / browser_click 等），禁止用 bash 執行 node / npx / playwright CLI。"
+                    "\n- 檔案讀寫 → 只用 filesystem MCP（read_file / write_file / list_directory 等），禁止用 bash cat / ls / cp。"
+                    "\n- bash_exec → 僅限 MCP 無法涵蓋的純系統操作（git、uv、ping 等）。"
+                    "\n- 嚴禁用 bash 執行 npm install / npx / node，嚴禁在專案目錄安裝任何 npm 套件。"
+                    "\n\n### 執行原則"
+                    "\n- 複雜任務請逐步完成：網頁操作需先確認頁面已載入，再進行點擊或截圖。"
+                    "\n- 工具呼叫失敗時，分析錯誤訊息，嘗試其他選擇器或方法，不要輕易放棄。"
+                    "\n- 完成任務後必須用文字告知結果（截圖路徑、操作是否成功等），不得無聲結束。"
                     if self.mcp_client and self.mcp_client.tool_names
                     else ""
                 )
