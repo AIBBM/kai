@@ -22,6 +22,9 @@ from config import (
     MAX_SEARCH_CHARS,
     MAX_TOOL_CALLS,
     NUM_CTX,
+    TEMPERATURE,
+    TOP_K,
+    TOP_P,
     USERNAME,
 )
 from models import ModelProfile, get_profile
@@ -256,7 +259,12 @@ class Agent:
                     think=self.profile.supports_thinking,  # 依 profile 開關
                     tools=active_tools,
                     stream=True,
-                    options={"num_ctx": self.profile.num_ctx},
+                    options={
+                        "num_ctx": self.profile.num_ctx,
+                        "temperature": TEMPERATURE,
+                        "top_k": TOP_K,
+                        "top_p": TOP_P,
+                    },
                 )
             except httpx.ConnectError:
                 self.console.print(
