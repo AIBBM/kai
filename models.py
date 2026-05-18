@@ -73,6 +73,13 @@ REGISTRY: dict[str, ModelProfile] = {
         supports_tools=True,
         num_ctx=8192,
     ),
+    "qwen2.5-coder:7b": ModelProfile(
+        "qwen2.5-coder:7b",
+        supports_thinking=False,
+        supports_vision=False,
+        supports_tools=True,
+        num_ctx=16384,
+    ),
     # ── Gemini (Google API) ──────────────────────────────────────────────────
     "gemini-2.0-flash": ModelProfile(
         "gemini-2.0-flash",
