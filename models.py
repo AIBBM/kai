@@ -33,7 +33,7 @@ REGISTRY: dict[str, ModelProfile] = {
     ),
     "qwen3.5:2b": ModelProfile(
         "qwen3.5:2b",
-        supports_thinking=True,
+        supports_thinking=False,
         supports_vision=True,
         num_ctx=16384,
     ),
