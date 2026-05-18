@@ -648,8 +648,12 @@ class ChatApp(App[None]):
             self.notify("已是目前模型", severity="information")
             return
         old_history = self.agent.history[:]
+        old_mcp = self.agent.mcp_client
+        old_ctx = getattr(self.agent, "mcp_context", "")
         self.agent = Agent(model=model_name)
         self.agent.history = old_history
+        self.agent.mcp_client = old_mcp
+        self.agent.mcp_context = old_ctx
         self.agent._reset_date()
         prompt = self.query_one("#prompt", HistoryInput)
         prompt.placeholder = f"傳訊息給 {model_name}..."
