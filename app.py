@@ -235,8 +235,9 @@ class CopyButton(Button):
         super().__init__("⎘", classes="copy-btn")
         self._code = code
 
-    def on_button_pressed(self) -> None:
-        if _copy_to_clipboard(self._code):
+    async def on_button_pressed(self) -> None:
+        ok = await asyncio.to_thread(_copy_to_clipboard, self._code)
+        if ok:
             self.app.notify("已複製", timeout=1.5)
         else:
             self.app.notify("複製失敗（需要 xclip 或 clip.exe）", severity="warning")
