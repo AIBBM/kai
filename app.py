@@ -18,10 +18,12 @@ from textual.containers import Horizontal, VerticalScroll
 from textual import events
 from textual.events import Click
 from textual.widget import Widget
-from textual.widgets import Button, Collapsible, Footer, Header, Input, Markdown, OptionList, Static, TextArea
-from textual.widgets.option_list import Option
+from textual.message import Message
+from textual.widgets import Button, Collapsible, Footer, Header, Input, Markdown, Static, TabbedContent, TabPane, TextArea, Tree
+from textual.widgets._tree import TreeNode
 from textual import work
 from loguru import logger
+from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
 from agent import Agent
 from config import BASH_TIMEOUT, MODEL
@@ -108,11 +110,15 @@ def _line_height(text: str, cols: int = 100) -> int:
 
 
 class HistoryInput(Input):
-    """Input with Up/Down history navigation.
+    """Input with Up/Down history navigation and Ctrl+Z undo.
 
     Uses _on_key (runs before the binding system) to intercept up/down before
     ScrollView's scroll_up/scroll_down bindings consume them.
     """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._undo_stack: list[tuple[str, int]] = []
 
     def _on_key(self, event: events.Key) -> None:
         if event.key == "up":
@@ -123,43 +129,260 @@ class HistoryInput(Input):
             event.prevent_default()
             event.stop()
             self.app.action_history_next()  # type: ignore[attr-defined]
-
-
-class NavigableOptionList(OptionList):
-    """OptionList 子類：在檔案瀏覽模式下支援字母鍵循環跳轉。"""
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self._jump_paths: list[str] = []
-        self._letter_idx: dict[str, int] = {}
-
-    def set_file_mode(self, paths: list[str]) -> None:
-        self._jump_paths = list(paths)
-        self._letter_idx = {}
-
-    def clear_file_mode(self) -> None:
-        self._jump_paths = []
-        self._letter_idx = {}
-
-    def on_key(self, event) -> None:
-        if not self._jump_paths:
-            return
-        key = event.key
-        if len(key) == 1 and key.isalpha():
-            letter = key.lower()
-            candidates = [
-                i for i, p in enumerate(self._jump_paths)
-                if Path(p).name.lower().startswith(letter)
-            ]
-            if not candidates:
-                return
+        elif event.key == "ctrl+z":
             event.prevent_default()
-            # advance past last match; wrap around when exhausted
-            last = self._letter_idx.get(letter, -1)
-            nexts = [i for i in candidates if i > last]
-            next_idx = nexts[0] if nexts else candidates[0]
-            self._letter_idx[letter] = next_idx
-            self.highlighted = next_idx
+            event.stop()
+            if self._undo_stack:
+                val, pos = self._undo_stack.pop()
+                self.value = val
+                self.cursor_position = min(pos, len(val))
+        else:
+            _SAVE_BEFORE = frozenset({"backspace", "delete", "ctrl+backspace", "ctrl+delete"})
+            if event.key in _SAVE_BEFORE or len(event.key) == 1:
+                self._undo_stack.append((self.value, self.cursor_position))
+                if len(self._undo_stack) > 200:
+                    del self._undo_stack[:-200]
+
+
+_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"})
+_HIDDEN_DIRS = frozenset({"__pycache__", ".git", ".venv", "node_modules", ".mypy_cache", ".ruff_cache"})
+
+_SUFFIX_TO_LANG: dict[str, str] = {
+    ".py": "python", ".js": "javascript", ".ts": "typescript",
+    ".jsx": "javascript", ".tsx": "typescript",
+    ".json": "json", ".md": "markdown", ".css": "css",
+    ".html": "html", ".sh": "bash", ".bash": "bash",
+    ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
+    ".rs": "rust", ".go": "go", ".c": "c", ".cpp": "cpp",
+    ".java": "java", ".sql": "sql", ".xml": "xml",
+}
+
+
+class ResizeHandle(Widget):
+    """拖拉分隔條，調整相鄰 widget 的寬度。"""
+
+    def __init__(self, target_id: str, min_w: int = 10, max_w: int = 80, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._target_id = target_id
+        self._min_w = min_w
+        self._max_w = max_w
+        self._dragging = False
+
+    def render(self) -> str:
+        return ""
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        self._dragging = True
+        self.capture_mouse()
+        self.add_class("dragging")
+        event.stop()
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        if self._dragging:
+            self._dragging = False
+            self.release_mouse()
+            self.remove_class("dragging")
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        if not self._dragging:
+            return
+        target = self.app.query_one(f"#{self._target_id}")
+        # screen_x 是游標的絕對 x 座標；target 從螢幕左側 target.region.x 開始
+        # 所以新寬度 = 游標位置 - target 起點
+        new_w = max(self._min_w, min(self._max_w, event.screen_x - target.region.x))
+        target.styles.width = new_w
+
+
+class FileTree(Widget):
+    """左側懶載入檔案樹；選取檔案後填入 prompt。"""
+
+    class FileChosen(Message):
+        def __init__(self, path: Path) -> None:
+            super().__init__()
+            self.path = path
+
+    def compose(self) -> ComposeResult:
+        cwd = Path(os.getcwd())
+        tree: Tree[Path] = Tree(cwd.name)
+        tree.root.data = cwd
+        tree.root.expand()
+        yield tree
+
+    def on_mount(self) -> None:
+        self._populate(self.query_one(Tree).root)
+
+    def _populate(self, node: "TreeNode[Path]") -> None:
+        path: Path = node.data
+        if not path or not path.is_dir():
+            return
+        node.remove_children()
+        try:
+            entries = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+        except PermissionError:
+            node.add_leaf("🔒 無權限", data=None)
+            return
+        for entry in entries:
+            if entry.name.startswith(".") or entry.name in _HIDDEN_DIRS:
+                continue
+            if entry.is_dir():
+                child = node.add(f"📁 {entry.name}", data=entry)
+                child.add_leaf("…", data=None)        # 佔位符讓節點顯示為可展開
+            else:
+                icon = "🖼 " if entry.suffix.lower() in _IMAGE_EXTS else "📄 "
+                node.add_leaf(f"{icon}{entry.name}", data=entry)
+
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        node = event.node
+        if node.data and isinstance(node.data, Path) and node.data.is_dir():
+            children = list(node.children)
+            if len(children) == 1 and children[0].data is None:
+                self._populate(node)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        path: Path | None = event.node.data
+        if path and path.is_file():
+            self.post_message(FileTree.FileChosen(path))
+
+    def refresh_tree(self) -> None:
+        tree = self.query_one(Tree)
+        cwd = Path(os.getcwd())
+        tree.root.label = cwd.name
+        tree.root.data = cwd
+        self._populate(tree.root)
+
+
+class ChatAutoComplete(AutoComplete):
+    """動態補全：斜線指令、/add /del /image 路徑、! bash 路徑。"""
+
+    def get_search_string(self, state: TargetState) -> str:
+        text = state.text
+        if text.startswith("/add "):
+            return text[5:]
+        if text.startswith("/del "):
+            return text[5:]
+        if text.startswith("/image "):
+            return text[7:]
+        if text.startswith("/"):
+            return text
+        if text.startswith("!"):
+            cmd_part = text[1:]
+            spaces = cmd_part.count(" ")
+            tokens = cmd_part.split()
+            last = tokens[-1] if tokens and not text.endswith(" ") else ""
+            path_like = last and ("." in last or "/" in last or last.startswith("~"))
+            if last and not last.startswith("-") and (spaces >= 2 or path_like):
+                return last
+        return ""
+
+    def should_show_dropdown(self, search_string: str) -> bool:
+        text = self._target_state.text
+        if text.startswith(("/add ", "/del ", "/image ")):
+            return self.option_list.option_count > 0
+        return super().should_show_dropdown(search_string)
+
+    def get_candidates(self, state: TargetState) -> list[DropdownItem]:
+        text = state.text
+        if text.startswith("/add "):
+            return self._file_items(text[5:])
+        if text.startswith("/image "):
+            return self._image_items(text[7:])
+        if text.startswith("/del "):
+            ctx = getattr(self.app, "_context_files", [])
+            search = text[5:].lower()
+            return [
+                DropdownItem(main=fp, prefix="🗑 ")
+                for fp, _ in ctx
+                if not search or search in fp.lower()
+            ][:20]
+        if text.startswith("/"):
+            cmds = getattr(self.app, "SLASH_COMMANDS", [])
+            return [
+                DropdownItem(main=cmd)
+                for cmd, desc in cmds
+                if text == "/" or cmd.startswith(text) or text[1:] in cmd
+            ]
+        if text.startswith("!"):
+            cmd_part = text[1:]
+            spaces = cmd_part.count(" ")
+            tokens = cmd_part.split()
+            last = tokens[-1] if tokens and not text.endswith(" ") else ""
+            path_like = last and ("." in last or "/" in last or last.startswith("~"))
+            if last and not last.startswith("-") and (spaces >= 2 or path_like):
+                return self._file_items(last)
+        return []
+
+    def _file_items(self, prefix: str) -> list[DropdownItem]:
+        try:
+            base = Path(prefix) if prefix else Path(".")
+            search_dir = base if base.is_dir() else base.parent
+            name_filter = "" if base.is_dir() else base.name.lower()
+            entries = sorted(search_dir.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+            return [
+                DropdownItem(
+                    main=str(p) + ("/" if p.is_dir() else ""),
+                    prefix="📁 " if p.is_dir() else "📄 ",
+                )
+                for p in entries
+                if p.name.lower().startswith(name_filter)
+            ][:20]
+        except Exception:
+            return []
+
+    def _image_items(self, prefix: str) -> list[DropdownItem]:
+        try:
+            base = Path(prefix) if prefix else Path(".")
+            search_dir = base if base.is_dir() else base.parent
+            name_filter = "" if base.is_dir() else base.name.lower()
+            entries = sorted(search_dir.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+            return [
+                DropdownItem(
+                    main=str(p) + ("/" if p.is_dir() else ""),
+                    prefix="📁 " if p.is_dir() else "🖼 ",
+                )
+                for p in entries
+                if p.name.lower().startswith(name_filter)
+                and (p.is_dir() or p.suffix.lower() in _IMAGE_EXTS)
+            ][:20]
+        except Exception:
+            return []
+
+    def apply_completion(self, value: str, state: TargetState) -> None:
+        text = state.text
+        target = self.target
+        if text.startswith(("/add ", "/del ", "/image ")):
+            slash_end = text.index(" ") + 1
+            new_val = text[:slash_end] + value
+            target.value = new_val
+            target.cursor_position = len(new_val)
+        elif text.startswith("/"):
+            target.value = value
+            target.cursor_position = len(value)
+        elif text.startswith("!"):
+            last_space = text.rfind(" ")
+            base = text[:last_space + 1] if last_space >= 0 else "!"
+            new_val = base + value + ("" if value.endswith("/") else " ")
+            target.value = new_val
+            target.cursor_position = len(new_val)
+        else:
+            super().apply_completion(value, state)
+        new_state = self._get_target_state()
+        self._rebuild_options(new_state, self.get_search_string(new_state))
+
+    def _align_to_target(self) -> None:
+        from textual.geometry import Offset
+        x, y = self.target.cursor_screen_offset
+        _w, h = self.option_list.outer_size
+        # outer_size is 0 before first layout; fall back to option count
+        if h == 0:
+            h = min(max(self.option_list.option_count, 1), 12)
+        # Input lives at the bottom — always show dropdown above the cursor
+        self.absolute_offset = Offset(max(0, x - 1), max(0, y - h))
+
+    def post_completion(self) -> None:
+        # 選到目錄時保持開啟繼續瀏覽
+        if self.target.value.endswith("/"):
+            return
+        self.action_hide()
 
 
 class Sidebar(Widget):
@@ -182,14 +405,15 @@ class Sidebar(Widget):
 
     @work(thread=True)
     def _refresh_git_worker(self) -> None:
+        from rich.text import Text as RichText
         try:
             out = subprocess.run(
-                ["git", "status", "--short"],
+                ["git", "-c", "color.status=always", "status", "--short"],
                 capture_output=True, text=True, timeout=2, cwd=os.getcwd(),
             ).stdout.strip()
-            result = out or "[dim]無變更[/dim]"
+            result = RichText.from_ansi(out) if out else RichText("無變更", style="dim")
         except Exception:
-            result = "[dim]非 git 目錄[/dim]"
+            result = RichText("非 git 目錄", style="dim")
         self.app.call_from_thread(self.query_one("#sb-git", Static).update, result)
 
     def refresh_git(self) -> None:
@@ -209,6 +433,55 @@ class Sidebar(Widget):
         else:
             text = "[dim]未啟用[/dim]"
         self.query_one("#sb-mcp", Static).update(text)
+
+
+class ImageBubble(Widget):
+    """使用者傳送的圖片訊息：metadata card + 開啟按鈕。"""
+
+    def __init__(self, path: str, question: str) -> None:
+        super().__init__(classes="image-bubble")
+        self._path = path
+        self._question = question
+
+    def compose(self) -> ComposeResult:
+        from PIL import Image
+        name = Path(self._path).name
+        try:
+            img = Image.open(self._path)
+            w, h = img.size
+            size_kb = Path(self._path).stat().st_size // 1024
+            meta = f"{w}×{h}  {size_kb} KB"
+        except Exception:
+            meta = "（無法讀取）"
+        yield Static(
+            f"[bold]Duncan[/bold]  🖼 {name}  [dim]{meta}[/dim]",
+            markup=True, classes="image-bubble-header",
+        )
+        yield Static(self._question, markup=False, classes="image-question")
+        yield Button("🔍 開啟圖片", classes="img-open-btn", variant="default")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        await asyncio.to_thread(_open_image, self._path)
+
+
+def _open_image(path: str) -> None:
+    """用系統預覽器開啟圖片（WSL → cmd.exe start，Linux → xdg-open，macOS → open）。"""
+    import shutil
+    try:
+        if shutil.which("wslpath"):                         # WSL
+            r = subprocess.run(["wslpath", "-w", path],
+                               capture_output=True, text=True)
+            win_path = r.stdout.strip() if r.returncode == 0 else path
+            # cmd.exe /c start "" "<path>" 用預設程式開啟，空字串是視窗標題佔位
+            subprocess.run(["cmd.exe", "/c", "start", "", win_path],
+                           check=False, capture_output=True)
+        elif shutil.which("xdg-open"):                      # Linux
+            subprocess.run(["xdg-open", path], check=False, capture_output=True)
+        elif shutil.which("open"):                          # macOS
+            subprocess.run(["open", path], check=False, capture_output=True)
+    except Exception as e:
+        logger.warning(f"開啟圖片失敗：{e}")
 
 
 def _copy_to_clipboard(text: str) -> bool:
@@ -243,14 +516,23 @@ class CopyButton(Button):
             self.app.notify("複製失敗（需要 xclip 或 clip.exe）", severity="warning")
 
 
-class ThinkButton(Button):
-    """輸入列旁的 Thinking 開關按鈕。"""
+class CapabilityBadge(Button):
+    """可點擊功能標籤（目前只有 think）。"""
 
-    def __init__(self) -> None:
-        super().__init__("💡", id="think-btn", tooltip="切換 Thinking 模式")
+    def __init__(self, key: str, label: str) -> None:
+        super().__init__(label, id=f"cap-{key}", classes="cap-badge")
+        self._key = key
 
     def on_button_pressed(self) -> None:
-        self.app.action_toggle_think()
+        if self._key == "think":
+            self.app.action_toggle_think()  # type: ignore[attr-defined]
+
+
+class CapLabel(Static):
+    """純顯示功能標籤（vision 等）。"""
+
+    def __init__(self, key: str, label: str) -> None:
+        super().__init__(label, id=f"cap-{key}", classes="cap-badge cap-label")
 
 
 class AIMessage(Widget):
@@ -342,7 +624,9 @@ class ChatApp(App[None]):
     BINDINGS = [
         Binding("ctrl+q", "quit", "退出"),
         Binding("ctrl+p", "command_palette", "命令"),
+        Binding("ctrl+t", "toggle_file_tree", "檔案樹"),
         Binding("ctrl+b", "toggle_sidebar", "側邊欄"),
+        Binding("ctrl+w", "close_tab", "關閉標籤", priority=True),
         Binding("escape", "cancel_stream", "取消"),
     ]
 
@@ -355,6 +639,7 @@ class ChatApp(App[None]):
         # selectors can't reach it, and it uses inline display=True which overrides CSS.
         self._disable_tooltips = True
         self.agent = Agent(model=MODEL)
+        self.scroll_sensitivity_y = 5.0
         self._spin_idx = 0
         self._spin_label = "生成中"
         self._context_files: list[tuple[str, str]] = []  # (path, content)
@@ -365,23 +650,34 @@ class ChatApp(App[None]):
         self._history_draft: str = ""
         self._mcp_task: asyncio.Task | None = None
         self._mcp_done: asyncio.Event | None = None
+        self._prev_cwd: str = os.getcwd()
+        self._open_file_tabs: dict[str, Path] = {}
+        self._file_tab_counter = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="app-grid"):
-            with VerticalScroll(id="messages"):
-                yield Static(
-                    "[dim]輸入訊息開始對話[/dim]  ·  "
-                    "[dim]Ctrl+P[/dim] 命令  "
-                    "[dim]Ctrl+B[/dim] 側邊欄  "
-                    "[dim]右鍵 AI 訊息[/dim] 選取複製",
-                    id="welcome", markup=True,
-                )
+            yield FileTree(id="file-tree")
+            yield ResizeHandle("file-tree", id="file-tree-handle")
+            with TabbedContent(initial="chat", id="center-tabs"):
+                with TabPane("💬 Chat", id="chat"):
+                    with VerticalScroll(id="messages"):
+                        yield Static(
+                            "[dim]輸入訊息開始對話[/dim]  ·  "
+                            "[dim]Ctrl+P[/dim] 命令  "
+                            "[dim]Ctrl+T[/dim] 檔案樹  "
+                            "[dim]Ctrl+B[/dim] 側邊欄  "
+                            "[dim]Ctrl+W[/dim] 關閉標籤  "
+                            "[dim]右鍵 AI 訊息[/dim] 選取複製",
+                            id="welcome", markup=True,
+                        )
             yield Sidebar(id="sidebar")
-        yield NavigableOptionList(id="cmd-overlay")
         with Horizontal(id="input-row"):
             yield HistoryInput(placeholder=f"傳訊息給 {MODEL}...", id="prompt")
-            yield ThinkButton()
+        yield ChatAutoComplete(target="#prompt", candidates=None)
+        with Horizontal(id="cap-bar"):
+            yield CapabilityBadge("think", "think")
+            yield CapLabel("vision", "vision")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -392,15 +688,17 @@ class ChatApp(App[None]):
         self._update_prompt_title()
         self.__class__.SLASH_COMMANDS = (
             [
-                ("/clear", "清除對話記錄"),
-                ("/add",   "加入檔案到上下文  /add <路徑>"),
-                ("/del",   "移除上下文檔案  /del <路徑>"),
-                ("/debug", "切換工具除錯模式（顯示工具參數與回應）"),
-                ("/think", "切換 Thinking 模式開／關"),
+                ("/clear",  "清除對話記錄"),
+                ("/add",    "加入檔案到上下文  /add <路徑>"),
+                ("/del",    "移除上下文檔案  /del <路徑>"),
+                ("/image",  "傳送圖片給模型  /image <路徑> [問題]"),
+                ("/debug",  "切換工具除錯模式（顯示工具參數與回應）"),
+                ("/think",  "切換 Thinking 模式開／關"),
+                ("/cd",     "切換工作目錄  /cd <路徑>"),
             ]
             + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
         )
-        self.query_one("#cmd-overlay", NavigableOptionList).border_title = "指令"
+        self._sync_cap_bar()
         # 每 15 秒輪詢 Git 狀態
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
         # start MCP in a dedicated asyncio task so start() and stop() share the same
@@ -470,7 +768,8 @@ class ChatApp(App[None]):
         prompt = self.query_one("#prompt", HistoryInput)
         if not prompt.has_focus or prompt.disabled:
             return
-        if self.query_one("#cmd-overlay", NavigableOptionList).display:
+        ac = self.query_one(ChatAutoComplete)
+        if ac.display:
             return
         if not self._input_history:
             return
@@ -484,7 +783,8 @@ class ChatApp(App[None]):
         prompt = self.query_one("#prompt", HistoryInput)
         if not prompt.has_focus or prompt.disabled:
             return
-        if self.query_one("#cmd-overlay", NavigableOptionList).display:
+        ac = self.query_one(ChatAutoComplete)
+        if ac.display:
             return
         if self._history_idx == -1:
             return
@@ -501,103 +801,16 @@ class ChatApp(App[None]):
             event.prevent_default()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        # When Playwright/WSLg resets terminal mouse-tracking state, SGR events and X10
-        # binary debris flood the input char-by-char. Just clear: user moved the mouse,
-        # not typed. Regex catches SGR; clearing handles binary X10 residue.
+        # Mouse debris from Playwright/WSLg — clear immediately
         if _MOUSE_SEQ.search(event.value):
             event.input.value = ""
             event.input.cursor_position = 0
-            return
-        value = event.value
-        overlay = self.query_one("#cmd-overlay", NavigableOptionList)
-
-        # /add <prefix> → 瀏覽目錄
-        if value.startswith("/add "):
-            self._show_file_browser(overlay, value[5:])
-            return
-
-        # /del <prefix> → 列出 context 檔案
-        if value.startswith("/del "):
-            self._show_del_list(overlay, value[5:])
-            return
-
-        if not value.startswith("/"):
-            overlay.clear_file_mode()
-            overlay.display = False
-            return
-
-        overlay.clear_file_mode()
-        matches = [(cmd, desc) for cmd, desc in self.SLASH_COMMANDS if cmd.startswith(value)]
-        overlay.clear_options()
-        for cmd, desc in matches:
-            overlay.add_option(Option(f"{cmd}  [dim]{desc}[/dim]", id=cmd))
-        overlay.display = bool(matches)
-
-    def _show_file_browser(self, overlay: NavigableOptionList, prefix: str) -> None:
-        try:
-            was_visible = overlay.display
-            base = Path(prefix) if prefix else Path(".")
-            search_dir = base if base.is_dir() else base.parent
-            name_filter = "" if base.is_dir() else base.name.lower()
-            entries = sorted(search_dir.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
-            matches = [p for p in entries if p.name.lower().startswith(name_filter)][:20]
-            overlay.clear_options()
-            paths: list[str] = []
-            for p in matches:
-                icon = "📁" if p.is_dir() else "📄"
-                path_str = str(p)
-                overlay.add_option(Option(f"{icon} {path_str}", id=f"__add__{path_str}"))
-                paths.append(path_str)
-            overlay.set_file_mode(paths)
-            overlay.border_title = "選擇檔案  ↓/字母鍵 跳轉"
-            overlay.display = bool(matches)
-            # only auto-focus on first open; don't steal focus on every keystroke update
-            if not was_visible and overlay.display:
-                overlay.focus()
-        except Exception:
-            overlay.display = False
-
-    def _show_del_list(self, overlay: NavigableOptionList, prefix: str) -> None:
-        overlay.clear_file_mode()
-        overlay.clear_options()
-        matches = [fp for fp, _ in self._context_files
-                   if not prefix or prefix.lower() in fp.lower()]
-        for fp in matches:
-            overlay.add_option(Option(f"🗑  {Path(fp).name}  [dim]{fp}[/dim]", id=f"__del__{fp}"))
-        if not matches:
-            overlay.add_option(Option("[dim]沒有上下文檔案[/dim]", id="__noop__"))
-        overlay.border_title = "移除檔案"
-        overlay.display = True
-
-    async def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        cmd_id = event.option_id or ""
-        prompt = self.query_one("#prompt", HistoryInput)
-        overlay = self.query_one("#cmd-overlay", NavigableOptionList)
-        overlay.border_title = "指令"
-        overlay.clear_file_mode()
-        overlay.display = False
-
-        if cmd_id.startswith("__add__"):
-            await self._add_file(cmd_id[7:])
-            prompt.value = ""
-            prompt.focus()
-        elif cmd_id.startswith("__del__"):
-            await self._del_file(cmd_id[7:])
-            prompt.value = ""
-            prompt.focus()
-        elif cmd_id == "__noop__":
-            prompt.focus()
-        else:
-            prompt.value = cmd_id + " "
-            prompt.cursor_position = len(prompt.value)
-            prompt.focus()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         if not text:
             return
         event.input.clear()
-        self.query_one("#cmd-overlay", NavigableOptionList).display = False
         if not self._input_history or self._input_history[-1] != text:
             self._input_history.append(text)
             _append_prompt_history(text)
@@ -635,6 +848,37 @@ class ChatApp(App[None]):
                 self._update_prompt_title()
             elif cmd == "/think":
                 self.action_toggle_think()
+            elif cmd == "/cd":
+                if arg:
+                    try:
+                        target = Path(self._prev_cwd if arg == "-" else arg).expanduser().resolve()
+                        self._prev_cwd = os.getcwd()
+                        os.chdir(target)
+                        self.query_one("#sb-cwd", Static).update(str(target))
+                        self.query_one("#file-tree", FileTree).refresh_tree()
+                        self.agent._reset_date()
+                        self.notify(f"已切換至 {target}", severity="information")
+                    except Exception as e:
+                        self.notify(f"切換失敗：{e}", severity="error")
+                else:
+                    self.notify(f"目前目錄：{os.getcwd()}", severity="information")
+            elif cmd == "/image":
+                if not arg:
+                    self.notify("用法：/image <圖片路徑> [問題]", severity="warning")
+                elif not self.agent.profile.supports_vision:
+                    self.notify(f"{self.agent.profile.name} 不支援圖片輸入", severity="error")
+                else:
+                    img_parts = arg.split(" ", 1)
+                    img_path = img_parts[0].strip()
+                    question = img_parts[1].strip() if len(img_parts) > 1 else "請分析這張圖片"
+                    p = Path(img_path).expanduser().resolve()
+                    if not p.exists():
+                        self.notify(f"找不到圖片：{img_path}", severity="error")
+                    else:
+                        msgs = self.query_one("#messages", VerticalScroll)
+                        await msgs.mount(ImageBubble(str(p), question))
+                        msgs.scroll_end(animate=False)
+                        self._send(question, images=[str(p)])
             else:
                 self.notify(f"未知指令：{cmd}", severity="warning")
             return
@@ -691,13 +935,87 @@ class ChatApp(App[None]):
             return self._think_override
         return self.agent.profile.supports_thinking
 
+    def _sync_cap_bar(self) -> None:
+        """同步功能標籤列的視覺狀態。"""
+        profile = self.agent.profile
+        thinking_on = self._thinking_active()
+
+        think = self.query_one("#cap-think", CapabilityBadge)
+        think.remove_class("cap-think-on", "cap-inactive", "cap-unsupported")
+        if thinking_on:
+            think.add_class("cap-think-on")
+        elif not profile.supports_thinking:
+            think.add_class("cap-unsupported")
+        else:
+            think.add_class("cap-inactive")
+
+        vision = self.query_one("#cap-vision", CapLabel)
+        vision.display = bool(profile.supports_vision)
+
     def action_toggle_think(self) -> None:
         current = self._thinking_active()
         self._think_override = not current
-        btn = self.query_one("#think-btn", ThinkButton)
-        btn.add_class("think-on") if self._think_override else btn.remove_class("think-on")
+        self._sync_cap_bar()
         label = "開啟 💡" if self._think_override else "關閉"
         self.notify(f"Thinking：{label}", severity="information", timeout=2)
+
+    def action_toggle_file_tree(self) -> None:
+        ft = self.query_one("#file-tree", FileTree)
+        ft.display = not ft.display
+        self.query_one("#file-tree-handle", ResizeHandle).display = ft.display
+
+    async def on_click(self, event: events.Click) -> None:
+        widget, region = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        wid = widget.id or "" if widget else ""
+        if not wid.startswith("--content-tab-ft-"):
+            return
+        tab_id = wid[len("--content-tab-"):]
+        # × is the last char of the label; Tab has padding:0 1 each side
+        # so × sits at region.x + region.width - 2
+        if event.screen_x >= region.x + region.width - 2:
+            event.stop()
+            tc = self.query_one("#center-tabs", TabbedContent)
+            self._open_file_tabs.pop(tab_id, None)
+            await tc.remove_pane(tab_id)
+
+    def on_file_tree_file_chosen(self, event: FileTree.FileChosen) -> None:
+        path = event.path
+        if path.suffix.lower() in _IMAGE_EXTS:
+            prompt = self.query_one("#prompt", HistoryInput)
+            prompt.value = f"/image {path} "
+            prompt.cursor_position = len(prompt.value)
+            prompt.focus()
+        else:
+            self._open_file_tab(path)
+
+    @work
+    async def _open_file_tab(self, path: Path) -> None:
+        tc = self.query_one("#center-tabs", TabbedContent)
+        for tid, p in self._open_file_tabs.items():
+            if p == path:
+                tc.active = tid
+                return
+        self._file_tab_counter += 1
+        tab_id = f"ft-{self._file_tab_counter}"
+        try:
+            content = await asyncio.to_thread(path.read_text, encoding="utf-8", errors="replace")
+        except Exception as e:
+            self.notify(f"無法讀取 {path.name}：{e}", severity="error")
+            return
+        lang = _SUFFIX_TO_LANG.get(path.suffix.lower())
+        ta = TextArea(content, read_only=True, language=lang,
+                      show_line_numbers=True, soft_wrap=False)
+        self._open_file_tabs[tab_id] = path
+        await tc.add_pane(TabPane(f"{path.name} ×", ta, id=tab_id))
+        tc.active = tab_id
+
+    async def action_close_tab(self) -> None:
+        tc = self.query_one("#center-tabs", TabbedContent)
+        active_id = tc.active
+        if not active_id or active_id == "chat":
+            return
+        self._open_file_tabs.pop(active_id, None)
+        await tc.remove_pane(active_id)
 
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#sidebar", Sidebar)
@@ -727,6 +1045,8 @@ class ChatApp(App[None]):
         self.agent.mcp_client = old_mcp
         self.agent.mcp_context = old_ctx
         self.agent._reset_date()
+        self._think_override = None
+        self._sync_cap_bar()
         prompt = self.query_one("#prompt", HistoryInput)
         prompt.placeholder = f"傳訊息給 {model_name}..."
         self.sub_title = model_name
@@ -736,7 +1056,7 @@ class ChatApp(App[None]):
     # ── Streaming worker ──────────────────────────────────────────────────────
 
     @work(exclusive=True)
-    async def _send(self, text: str) -> None:
+    async def _send(self, text: str, images: list[str] | None = None) -> None:
         msgs   = self.query_one("#messages", VerticalScroll)
         prompt = self.query_one("#prompt",   HistoryInput)
         stream_msg: AIMessage | None = None
@@ -759,6 +1079,8 @@ class ChatApp(App[None]):
             def _at_bottom() -> bool:
                 return msgs.scroll_y >= msgs.max_scroll_y - 3
 
+            _last_render: float = 0.0
+
             async def on_thinking(content: str) -> None:
                 self._spin_label = "思考中"
                 preview = content[:2000] + ("…" if len(content) > 2000 else "")
@@ -769,16 +1091,19 @@ class ChatApp(App[None]):
                 msgs.scroll_end(animate=False)
 
             async def on_token(chunk: str) -> None:
-                nonlocal stream_msg
+                nonlocal stream_msg, _last_render
                 self._spin_label = "生成中"
                 buf.append(chunk)
                 if stream_msg is None:
                     await msgs.mount(Static(f"🤖 {self.agent.profile.name}", classes="ai-header", markup=False))
                     stream_msg = AIMessage()
                     await msgs.mount(stream_msg)
-                await stream_msg.update_content("".join(buf))
-                if _at_bottom():
-                    msgs.scroll_end(animate=False)
+                now = asyncio.get_event_loop().time()
+                if now - _last_render >= 0.1:
+                    _last_render = now
+                    await stream_msg.update_content("".join(buf))
+                    if _at_bottom():
+                        msgs.scroll_end(animate=False)
 
             async def on_done(elapsed, thinking_s, gen_tok, prompt_tok) -> None:
                 if stream_msg:
@@ -792,6 +1117,10 @@ class ChatApp(App[None]):
                 parts.append(f"共 {elapsed:.1f}s")
                 if gen_tok:
                     parts.append(f"{gen_tok} tokens")
+                if prompt_tok:
+                    num_ctx = self.agent.profile.num_ctx
+                    pct = prompt_tok * 100 // num_ctx
+                    parts.append(f"ctx {pct}% ({prompt_tok}/{num_ctx})")
                 stats = " · ".join(parts)
                 at_bot = _at_bottom()
                 await msgs.mount(Static(stats, classes="stats", markup=False))
@@ -802,7 +1131,25 @@ class ChatApp(App[None]):
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
                 self._spin_label = "工具回應中"
+                _ERR_KEYWORDS = ("error", "Error", "exception", "not found", "Not Found",
+                                 "failed", "Failed", "errno", "traceback", "Traceback",
+                                 "[stderr]", "[exit code")
+                is_err = any(kw in result for kw in _ERR_KEYWORDS)
+                icon = "❌" if is_err else "🔧"
+                card_class = "tool-debug tool-debug-error" if is_err else "tool-debug"
                 if not self._debug_tools:
+                    if is_err:
+                        # 即使 debug 模式關閉，錯誤仍顯示（收合）
+                        await msgs.mount(
+                            Collapsible(
+                                Static(result[:400], markup=False),
+                                title=f"{icon} {name}  [dim]工具錯誤[/dim]",
+                                collapsed=True,
+                                classes=card_class,
+                            )
+                        )
+                        if _at_bottom():
+                            msgs.scroll_end(animate=False)
                     return
                 args_str = json.dumps(args, ensure_ascii=False, indent=2)
                 cap = 1000
@@ -812,9 +1159,9 @@ class ChatApp(App[None]):
                 await msgs.mount(
                     Collapsible(
                         Markdown(body),
-                        title=f"🔧 {name}",
-                        collapsed=True,
-                        classes="tool-debug",
+                        title=f"{icon} {name}",
+                        collapsed=not is_err,
+                        classes=card_class,
                     )
                 )
                 if at_bot:
@@ -827,8 +1174,11 @@ class ChatApp(App[None]):
                     await stream_msg.update_content("")
 
             self.agent.profile.supports_thinking = self._thinking_active()
+            user_msg: dict = {"role": "user", "content": text}
+            if images:
+                user_msg["images"] = images
             await self.agent.chat(
-                {"role": "user", "content": text},
+                user_msg,
                 on_token=on_token,
                 on_thinking=on_thinking,
                 on_done=on_done,
@@ -898,14 +1248,9 @@ class ChatApp(App[None]):
             self._update_prompt_title()
             prompt.placeholder = f"傳訊息給 {self.agent.profile.name}..."
             prompt.focus()
+            self.query_one("#sidebar", Sidebar).refresh_git()
 
     def action_cancel_stream(self) -> None:
-        overlay = self.query_one("#cmd-overlay", NavigableOptionList)
-        if overlay.has_focus and overlay.display:
-            overlay.display = False
-            overlay.clear_file_mode()
-            self.query_one("#prompt", HistoryInput).focus()
-            return
         self.agent._cancelled = True
 
 

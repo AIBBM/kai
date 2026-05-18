@@ -1,12 +1,63 @@
 /* ─── 主佈局 ─── */
+Screen {
+    layout: vertical;
+}
+
+* {
+    scrollbar-size: 1 1;
+}
+
 #app-grid {
     height: 1fr;
 }
+
+/* ─── 中央標籤面板 ─── */
+#center-tabs {
+    width: 1fr;
+}
+
+#center-tabs TabPane {
+    padding: 0;
+    height: 1fr;
+}
+
+#center-tabs TextArea {
+    height: 1fr;
+    border: none;
+}
+
 
 #messages {
     width: 1fr;
     padding: 0 2 1 2;
     scrollbar-gutter: stable;
+}
+
+/* ─── 檔案樹 ─── */
+#file-tree {
+    width: 28;
+    background: $surface;
+    border-right: tall $panel;
+    overflow-y: auto;
+}
+
+#file-tree Tree {
+    background: transparent;
+    padding: 0 0 0 1;
+}
+
+/* ─── 拖拉分隔條 ─── */
+ResizeHandle {
+    width: 1;
+    background: $panel;
+}
+
+ResizeHandle:hover {
+    background: $primary-darken-1;
+}
+
+ResizeHandle.dragging {
+    background: $accent;
 }
 
 /* ─── 側邊欄 ─── */
@@ -45,6 +96,40 @@
     background: $primary-background;
     padding: 0 1;
     margin: 1 0 0 0;
+}
+
+/* ─── 圖片訊息 ─── */
+.image-bubble {
+    height: auto;
+    border-left: thick $primary;
+    background: $primary-background;
+    padding: 0 1 0 1;
+    margin: 1 0 0 0;
+}
+
+.image-bubble-header {
+    margin: 0;
+    padding: 0;
+}
+
+.image-question {
+    color: $text-muted;
+    margin: 0;
+    padding: 0;
+}
+
+.img-open-btn {
+    height: 1;
+    min-width: 10;
+    margin: 0 0 0 0;
+    border: none;
+    background: $surface;
+    color: $text-muted;
+}
+
+.img-open-btn:hover {
+    background: $primary-background;
+    color: $primary;
 }
 
 .ai-header {
@@ -129,42 +214,36 @@ AIMessage.select-mode .ta-view {
     color: $warning;
 }
 
-/* ─── 斜線指令選單 ─── */
-#cmd-overlay {
-    height: auto;
-    max-height: 10;
-    margin: 0 1 0 1;
-    display: none;
-    background: $surface;
+.tool-debug-error {
+    border-left: thick $error;
+}
+
+.tool-debug-error > CollapsibleTitle {
+    color: $error;
+}
+
+/* ─── 補全下拉 ─── */
+AutoComplete {
+    max-height: 12;
     border: round $primary;
+    background: $surface;
+}
+
+AutoComplete .autocomplete--highlight-match {
+    text-style: bold;
+    color: $accent;
 }
 
 /* ─── 輸入列 ─── */
 #input-row {
-    height: 5;
-    align: left middle;
-}
-
-#think-btn {
-    width: 5;
     height: 3;
-    min-width: 5;
-    margin: 0 1 1 0;
-    background: $surface;
-    border: tall $panel;
-    color: $text-muted;
-}
-
-#think-btn.think-on {
-    background: $warning-darken-2;
-    border: tall $warning;
-    color: $warning;
+    align: left middle;
 }
 
 #prompt {
     width: 1fr;
     border: round $primary;
-    margin: 0 1 1 1;
+    margin: 0 1 0 1;
     background: $boost;
     border-title-color: $primary;
     border-title-style: bold;
@@ -178,6 +257,55 @@ AIMessage.select-mode .ta-view {
 #prompt.streaming {
     border: round $warning;
     border-title-color: $warning;
+}
+
+/* ─── 功能標籤列 ─── */
+#cap-bar {
+    height: 2;
+    align: left middle;
+    padding: 0 2;
+}
+
+.cap-badge {
+    height: 1;
+    min-width: 8;
+    margin: 0 1 0 0;
+    padding: 0 1;
+    border: none;
+    background: $primary-background;
+    color: $primary;
+}
+
+.cap-badge:hover {
+    background: $primary;
+    color: $background;
+}
+
+.cap-badge.cap-think-on {
+    background: $warning-darken-2;
+    color: $warning;
+}
+
+.cap-badge.cap-think-on:hover {
+    background: $warning;
+    color: $background;
+}
+
+.cap-badge.cap-inactive {
+    background: $surface;
+    color: $text-muted;
+}
+
+.cap-badge.cap-unsupported {
+    background: transparent;
+    color: $text-muted;
+    text-style: dim;
+}
+
+.cap-badge.cap-label {
+    width: auto;
+    background: $primary-background;
+    color: $primary;
 }
 
 /* ─── 程式碼複製按鈕 ─── */
