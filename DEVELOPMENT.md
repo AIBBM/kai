@@ -178,6 +178,37 @@ Ollama tools  → 每個工具的 description + parameters schema（呼叫方式
 
 Schema 來源：MCP server 在 `list_tools()` 時回傳，`mcp_client.py` 轉換為 Ollama 格式後加入 `active_tools`。
 
+### Ollama tools 機制（我們不需要自己處理的部分）
+
+我們只負責傳入 schema、接出結構化結果。中間的工作全由 Ollama 代勞：
+
+```
+我們                         Ollama                        模型
+─────                        ──────                        ────
+tools=[                      依 chat template              <|im_start|>system
+  {                    →     把 schema 注入 prompt    →    你有以下工具：
+    "type": "function",                                    {"name": "browser_navigate"
+    "function": {                                           "description": "...",
+      "name": "...",                                        "parameters": {...}}
+      "description": "...",                                ...
+      "parameters": {...}                                  <|im_end|>
+    }
+  }, ...
+]
+                             解析模型輸出的 tool call      輸出 JSON / XML 格式
+                    ←        轉成結構化物件          ←     {"name": "browser_navigate",
+                                                           "arguments": {"url": "..."}}
+
+msg.tool_calls = [
+  ToolCall(function=Function(
+    name="browser_navigate",
+    arguments={"url": "https://..."}
+  ))
+]
+```
+
+**注意**：模型輸出 tool call 的格式（JSON 或 XML）由 Ollama 的 chat template 決定，不同模型不同。Qwen3 系列有時輸出格式不正確的 XML，導致 Ollama parser 報 `XML syntax error`——這個 bug 在 Ollama 層，不在我們的程式碼中（我們對此加了 auto retry）。
+
 ---
 
 ## TUI 架構（app.py）
