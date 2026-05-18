@@ -66,6 +66,120 @@ if NUM_CTX:
 
 ---
 
+## MCP 工具呼叫完整流程
+
+以「幫我開啟 momo 搜尋 PEGASUS 41」為例：
+
+```
+使用者輸入
+│
+▼
+┌─────────────────────────────────────────────────────┐
+│  TUI: on_input_submitted                            │
+│  → 把訊息渲染到畫面                                 │
+│  → _send() worker 啟動（@work exclusive）           │
+└──────────────────────┬──────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  agent.chat() 準備階段                              │
+│  1. _reset_date()  — 更新 system message 時間戳     │
+│  2. history.append(user_msg)                        │
+│  3. messages = _trim_history()  ← 只保留最近 N 輪   │
+│  4. active_tools = [SEARCH, BASH] + MCP 39 個工具   │
+│     每個工具帶完整 schema（description + params）   │
+│     schema 來自 MCP server list_tools()，非 prompt  │
+└──────────────────────┬──────────────────────────────┘
+                       │
+              ┌────────┴────────┐
+              │   while True    │  ← tool calling loop
+              └────────┬────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  Ollama API: chat(messages, tools, stream=True)     │
+│  傳入：messages（對話歷史）+ tools（schema 清單）   │
+│  選項：num_ctx=16384, think=True                    │
+└──────────────────────┬──────────────────────────────┘
+                       │  串流回應
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  逐 chunk 處理串流                                  │
+│  msg.thinking  → on_thinking() → TUI 顯示思考框    │
+│  msg.content   → on_token()   → TUI 逐字渲染       │
+│  msg.tool_calls→ 收集到 tool_calls list             │
+└──────────────────────┬──────────────────────────────┘
+                       │
+          ┌────────────┴────────────┐
+        空 tool_calls            有 tool_calls
+          │                         │
+          ▼                         ▼
+┌──────────────────┐  ┌─────────────────────────────────┐
+│ 正常結束這輪      │  │ 並發執行所有工具                 │
+│ history.append   │  │ asyncio.gather(                 │
+│   (assistant)    │  │   run_tool(tc) for tc in …)     │
+│ _rotate_history()│  │                                 │
+│ save_history()   │  │ run_tool 分兩條路：              │
+│ on_done()        │  │  ├─ MCP tool  → mcp_client.call │
+│ → TUI 顯示統計  │  │  └─ 本地 tool → tools_map       │
+└──────────────────┘  └──────────────┬──────────────────┘
+                                      │
+                                      ▼
+                       ┌─────────────────────────────────┐
+                       │  MCP 呼叫路徑                   │
+                       │  mcp_client.call(               │
+                       │    "browser_navigate",          │
+                       │    {"url": "momoshop.com.tw"}   │
+                       │  )                              │
+                       │  ↓ JSON-RPC over stdio          │
+                       │  Playwright MCP process         │
+                       │  ↓ 控制 Chromium                │
+                       │  ↓ 執行操作（導航/點擊/截圖…）  │
+                       │  ↓ 回傳文字結果                 │
+                       └──────────────┬──────────────────┘
+                                      │
+                                      ▼
+                       ┌─────────────────────────────────┐
+                       │  結果處理                       │
+                       │  on_tool_call() → TUI debug 框 │
+                       │    （需開啟 /debug 模式才顯示） │
+                       │                                 │
+                       │  messages.append(               │
+                       │    assistant + tool_calls)      │
+                       │  messages.append(               │
+                       │    tool result, 截斷至 8000 ch) │
+                       │                                 │
+                       │  tool_call_count += 1           │
+                       │  >= MAX_TOOL_CALLS(15)?         │
+                       │    → raise RuntimeError         │
+                       └──────────────┬──────────────────┘
+                                      │
+                                      └──→ 回到 while True
+                                           帶完整工具結果
+                                           再問 Ollama
+```
+
+### history vs messages 的差異
+
+| | `self.history` | `messages`（當輪） |
+|---|---|---|
+| 內容 | user + assistant 最終回覆 | 包含 tool_calls + tool_results |
+| 持久化 | 寫入 history.json | 僅存在當次 chat() 呼叫中 |
+| 下輪使用 | `_trim_history()` 重建 | 丟棄 |
+
+### 模型如何知道工具用法
+
+模型**不**靠 system prompt 學習工具用法。工具說明透過 Ollama `tools` 參數傳入（function calling 標準機制）：
+
+```
+system prompt → 工具名稱清單 + 優先順序規則（語境）
+Ollama tools  → 每個工具的 description + parameters schema（呼叫方式）
+```
+
+Schema 來源：MCP server 在 `list_tools()` 時回傳，`mcp_client.py` 轉換為 Ollama 格式後加入 `active_tools`。
+
+---
+
 ## TUI 架構（app.py）
 
 CLI 版（`main.py`）之外，`app.py` 是 Textual TUI。
