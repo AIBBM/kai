@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from functools import partial
 from pathlib import Path
 
@@ -17,9 +18,10 @@ from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, VerticalScroll
 from textual import events
 from textual.events import Click
+from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.message import Message
-from textual.widgets import Button, Collapsible, Footer, Header, Input, Markdown, Static, TabbedContent, TabPane, TextArea, Tree
+from textual.widgets import Button, Collapsible, Footer, Header, Input, Markdown, OptionList, Static, TabbedContent, TabPane, TextArea, Tree
 from textual.widgets._tree import TreeNode
 from textual import work
 from loguru import logger
@@ -119,6 +121,32 @@ class HistoryInput(Input):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._undo_stack: list[tuple[str, int]] = []
+        self._multiline_paste: str | None = None   # 暫存多行貼上內容
+        self._multiline_marker: str | None = None  # 對應的佔位摘要字串
+
+    def on_paste(self, event: events.Paste) -> None:
+        text = event.text
+        if "\n" not in text and "\r" not in text:
+            return
+        event.prevent_default()
+        raw = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+        # If this paste matches the last FileViewer copy, prepend filename + line context
+        last = getattr(self.app, "_last_file_copy", None)
+        if last and last.get("text", "").strip() == raw:
+            p = last["path"]
+            fname = p.name if p else "unknown"
+            s, e = last["start_line"], last["end_line"]
+            loc = f"{fname}:{s}" if s == e else f"{fname}:{s}-{e}"
+            raw = f"```{p.suffix.lstrip('.') if p else ''} {loc}\n{raw}\n```"
+
+        self._multiline_paste = raw
+        lines = raw.splitlines()
+        preview = lines[0][:40] + ("…" if len(lines[0]) > 40 else "")
+        marker = f"[{len(lines)} 行] {preview}"
+        self._multiline_marker = marker
+        self.value = marker
+        self.cursor_position = len(self.value)
 
     def _on_key(self, event: events.Key) -> None:
         if event.key == "up":
@@ -193,6 +221,105 @@ class ResizeHandle(Widget):
         target.styles.width = new_w
 
 
+class TreeContextMenu(ModalScreen):
+    """檔案樹右鍵選單。"""
+
+    DEFAULT_CSS = """
+    TreeContextMenu {
+        background: transparent;
+        align: left top;
+    }
+    TreeContextMenu OptionList {
+        width: 22;
+        height: auto;
+        max-height: 12;
+        border: round $primary;
+        background: $surface;
+    }
+    """
+
+    def __init__(self, path: Path | None, sx: int, sy: int) -> None:
+        super().__init__()
+        self._path = path
+        self._sx = sx
+        self._sy = sy
+
+    def compose(self) -> ComposeResult:
+        yield OptionList("複製檔名", id="ctx-options")
+
+    def on_mount(self) -> None:
+        ol = self.query_one(OptionList)
+        x = min(self._sx, self.app.size.width - 24)
+        y = min(self._sy, self.app.size.height - 6)
+        ol.styles.offset = (x, y)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if self._path and event.option_index == 0:
+            path = self._path
+            app = self.app
+            app.notify(f"已複製：{_relative_display(path)}", timeout=1.5)
+            self.dismiss()
+            app.run_worker(lambda: _copy_filename_bg(app, path), thread=True)
+        else:
+            self.dismiss()
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        if event.button != 3:
+            return
+        widget, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        ol = self.query_one(OptionList)
+        if ol in widget.ancestors_with_self:
+            return
+        new_path = self._node_at_screen(event.screen_x, event.screen_y)
+        self.dismiss()
+        if new_path:
+            self.app.push_screen(TreeContextMenu(new_path, event.screen_x, event.screen_y))
+
+    def _node_at_screen(self, sx: int, sy: int) -> Path | None:
+        try:
+            tree = self.app.query_one(RightClickTree)
+            r = tree.region
+            if not r.contains(sx, sy):
+                return None
+            line = int(sy - r.y) + int(tree.scroll_y)
+            node = tree.get_node_at_line(line)
+            path = node.data if node else None
+            if isinstance(path, Path):
+                tree.move_cursor(node)
+                return path
+        except Exception:
+            pass
+        return None
+
+    def on_click(self, event: events.Click) -> None:
+        widget, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        ol = self.query_one(OptionList)
+        if ol not in widget.ancestors_with_self:
+            self.dismiss()
+
+
+class RightClickTree(Tree):
+    """Tree subclass that intercepts right-click before internal _on_mouse_down stops it."""
+
+    class NodeRightClicked(Message):
+        def __init__(self, path: Path, sx: int, sy: int) -> None:
+            super().__init__()
+            self.path = path
+            self.sx = sx
+            self.sy = sy
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        if event.button != 3:
+            return
+        line = int(event.y) + int(self.scroll_y)
+        node = self.get_node_at_line(line)
+        path = node.data if node else None
+        if isinstance(path, Path):
+            self.move_cursor(node)
+            event.stop()
+            self.post_message(self.NodeRightClicked(path, event.screen_x, event.screen_y))
+
+
 class FileTree(Widget):
     """左側懶載入檔案樹；選取檔案後填入 prompt。"""
 
@@ -203,13 +330,15 @@ class FileTree(Widget):
 
     def compose(self) -> ComposeResult:
         cwd = Path(os.getcwd())
-        tree: Tree[Path] = Tree(cwd.name)
+        tree: RightClickTree[Path] = RightClickTree(cwd.name)
         tree.root.data = cwd
         tree.root.expand()
         yield tree
 
     def on_mount(self) -> None:
-        self._populate(self.query_one(Tree).root)
+        self._populate(self.query_one(RightClickTree).root)
+        self._last_selected: Path | None = None
+        self._last_select_time: float = 0.0
 
     def _populate(self, node: "TreeNode[Path]") -> None:
         path: Path = node.data
@@ -240,15 +369,26 @@ class FileTree(Widget):
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         path: Path | None = event.node.data
-        if path and path.is_file():
+        if not path or not path.is_file():
+            return
+        now = time.monotonic()
+        if path == self._last_selected and now - self._last_select_time < 0.4:
             self.post_message(FileTree.FileChosen(path))
+            self._last_selected = None
+        else:
+            self._last_selected = path
+            self._last_select_time = now
+
+    def on_right_click_tree_node_right_clicked(self, event: RightClickTree.NodeRightClicked) -> None:
+        self.app.push_screen(TreeContextMenu(event.path, event.sx, event.sy))
 
     def refresh_tree(self) -> None:
-        tree = self.query_one(Tree)
+        tree = self.query_one(RightClickTree)
         cwd = Path(os.getcwd())
         tree.root.label = cwd.name
         tree.root.data = cwd
         self._populate(tree.root)
+        tree.root.expand()
 
 
 class ChatAutoComplete(AutoComplete):
@@ -385,6 +525,22 @@ class ChatAutoComplete(AutoComplete):
         self.action_hide()
 
 
+def _relative_display(path: Path) -> str:
+    """回傳相對於 cwd 的路徑字串；資料夾加尾斜線。"""
+    try:
+        rel = path.relative_to(Path(os.getcwd()))
+    except ValueError:
+        rel = path
+    return str(rel) + ("/" if path.is_dir() else "")
+
+
+def _copy_filename_bg(app: "App", path: Path) -> None:
+    """背景複製路徑，失敗才補 error toast。"""
+    ok = _copy_to_clipboard(_relative_display(path))
+    if not ok:
+        app.call_from_thread(app.notify, "複製失敗", severity="warning", timeout=1.5)
+
+
 class Sidebar(Widget):
     """工作目錄、上下文檔案、模型、Git 狀態側邊欄。"""
 
@@ -432,7 +588,10 @@ class Sidebar(Widget):
             text = "\n".join(lines)
         else:
             text = "[dim]未啟用[/dim]"
-        self.query_one("#sb-mcp", Static).update(text)
+        try:
+            self.query_one("#sb-mcp", Static).update(text)
+        except Exception:
+            pass
 
 
 class ImageBubble(Widget):
@@ -488,17 +647,52 @@ def _copy_to_clipboard(text: str) -> bool:
     """複製文字到剪貼簿。依序嘗試 xclip → clip.exe（WSL）。"""
     try:
         subprocess.run(["xclip", "-selection", "clipboard"],
-                       input=text.encode(), check=True, capture_output=True)
+                       input=text.encode(), check=True, capture_output=True, timeout=3)
         return True
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         pass
     try:
+        # clip.exe 需要 UTF-16-LE + BOM（\xff\xfe）才會以 Unicode 模式讀取。
+        # 沒有 BOM 時會當 ANSI 解讀，中文會亂碼；
+        # 有 BOM 時 \r\n 在 UTF-16-LE 中是 \x0d\x00\x0a\x00，clip.exe 可正確處理多行。
+        win_text = text.replace("\n", "\r\n")
+        bom = b"\xff\xfe"
         subprocess.run(["clip.exe"],
-                       input=text.encode("utf-16-le"), check=True, capture_output=True)
+                       input=bom + win_text.encode("utf-16-le"),
+                       check=True, capture_output=True, timeout=3)
         return True
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         pass
     return False
+
+
+class FileViewer(TextArea):
+    """唯讀檔案檢視器，覆寫 Ctrl+C 以支援 WSL 多行複製。"""
+
+    def action_copy(self) -> None:
+        text = self.selected_text
+        if not text:
+            return
+        sel = self.selection
+        start_line = sel.start[0] + 1   # 1-indexed
+        end_line   = sel.end[0] + 1
+        # parent is TabPane whose id is the tab_id key in _open_file_tabs
+        tab_id = self.parent.id if self.parent else None
+        file_path: Path | None = self.app._open_file_tabs.get(tab_id) if tab_id else None  # type: ignore[attr-defined]
+        self.app._last_file_copy = {  # type: ignore[attr-defined]
+            "text": text,
+            "path": file_path,
+            "start_line": start_line,
+            "end_line": end_line,
+        }
+        self._copy_worker(text)
+
+    @work(thread=True)
+    def _copy_worker(self, text: str) -> None:
+        ok = _copy_to_clipboard(text)
+        msg = "已複製" if ok else "複製失敗（需要 xclip 或 clip.exe）"
+        sev = "information" if ok else "warning"
+        self.app.call_from_thread(self.app.notify, msg, severity=sev, timeout=1.5)
 
 
 class CopyButton(Button):
@@ -653,6 +847,7 @@ class ChatApp(App[None]):
         self._prev_cwd: str = os.getcwd()
         self._open_file_tabs: dict[str, Path] = {}
         self._file_tab_counter = 0
+        self._last_file_copy: dict | None = None  # {text, path, start_line, end_line}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -807,7 +1002,19 @@ class ChatApp(App[None]):
             event.input.cursor_position = 0
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        text = event.value.strip()
+        prompt = self.query_one("#prompt", HistoryInput)
+        if prompt._multiline_paste is not None:
+            paste = prompt._multiline_paste
+            marker = prompt._multiline_marker or ""
+            prompt._multiline_paste = None
+            prompt._multiline_marker = None
+            raw_value = event.value
+            if marker and marker in raw_value:
+                text = raw_value.replace(marker, paste, 1).strip()
+            else:
+                text = paste
+        else:
+            text = event.value.strip()
         if not text:
             return
         event.input.clear()
@@ -851,13 +1058,7 @@ class ChatApp(App[None]):
             elif cmd == "/cd":
                 if arg:
                     try:
-                        target = Path(self._prev_cwd if arg == "-" else arg).expanduser().resolve()
-                        self._prev_cwd = os.getcwd()
-                        os.chdir(target)
-                        self.query_one("#sb-cwd", Static).update(str(target))
-                        self.query_one("#file-tree", FileTree).refresh_tree()
-                        self.agent._reset_date()
-                        self.notify(f"已切換至 {target}", severity="information")
+                        await self._do_cd(arg)
                     except Exception as e:
                         self.notify(f"切換失敗：{e}", severity="error")
                 else:
@@ -1003,8 +1204,8 @@ class ChatApp(App[None]):
             self.notify(f"無法讀取 {path.name}：{e}", severity="error")
             return
         lang = _SUFFIX_TO_LANG.get(path.suffix.lower())
-        ta = TextArea(content, read_only=True, language=lang,
-                      show_line_numbers=True, soft_wrap=False)
+        ta = FileViewer(content, read_only=True, language=lang,
+                        show_line_numbers=True, soft_wrap=False)
         self._open_file_tabs[tab_id] = path
         await tc.add_pane(TabPane(f"{path.name} ×", ta, id=tab_id))
         tc.active = tab_id
@@ -1020,6 +1221,23 @@ class ChatApp(App[None]):
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#sidebar", Sidebar)
         sidebar.display = not sidebar.display
+
+    async def _do_cd(self, arg: str) -> None:
+        """切換工作目錄：存舊 history → chdir → 重載新 history → 清 UI。"""
+        target = Path(self._prev_cwd if arg == "-" else arg).expanduser().resolve()
+        if not target.is_dir():
+            self.notify(f"目錄不存在：{target}", severity="error")
+            return
+        self.agent.save_history()
+        self._prev_cwd = os.getcwd()
+        os.chdir(target)
+        self.query_one("#sb-cwd", Static).update(str(target))
+        self.query_one("#file-tree", FileTree).refresh_tree()
+        self.agent.reset_history()
+        self._context_files.clear()
+        self.query_one("#sidebar", Sidebar).set_files([])
+        await self.query_one("#messages", VerticalScroll).remove_children()
+        self.notify(f"已切換至 {target}", severity="information")
 
     async def action_clear(self) -> None:
         await self.query_one("#messages", VerticalScroll).remove_children()
@@ -1205,6 +1423,16 @@ class ChatApp(App[None]):
 
     @work
     async def _run_bash(self, cmd: str) -> None:
+        # cd 是 shell built-in，子行程執行不影響 app cwd，改為直接呼叫 os.chdir
+        stripped = cmd.strip()
+        if stripped == "cd" or stripped.startswith("cd ") or stripped.startswith("cd\t"):
+            arg = stripped[2:].strip() or str(Path.home())
+            try:
+                await self._do_cd(arg)
+            except Exception as e:
+                self.notify(f"切換失敗：{e}", severity="error")
+            return
+
         msgs   = self.query_one("#messages", VerticalScroll)
         prompt = self.query_one("#prompt",   HistoryInput)
         await msgs.mount(
@@ -1249,6 +1477,7 @@ class ChatApp(App[None]):
             prompt.placeholder = f"傳訊息給 {self.agent.profile.name}..."
             prompt.focus()
             self.query_one("#sidebar", Sidebar).refresh_git()
+            self.query_one("#file-tree", FileTree).refresh_tree()
 
     def action_cancel_stream(self) -> None:
         self.agent._cancelled = True

@@ -163,6 +163,12 @@ class Agent:
             self.history = system + rest
             logger.debug(f"歷史 rotate，保留 {len(rest)} 則")
 
+    def reset_history(self):
+        """切換工作目錄後清空並重新載入新 cwd 的 history.json。"""
+        self.history = []
+        self._reset_date()
+        self._load_history()
+
     def save_history(self):
         """將對話歷史寫入 HISTORY_FILE，只存最近 HISTORY_KEEP * 2 則。"""
         system = [m for m in self.history if m["role"] == "system"]

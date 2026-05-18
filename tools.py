@@ -162,6 +162,8 @@ async def bash_exec(command: str, timeout: int = 0) -> str:
             parts.append(f"[stderr]\n{err}")
         result = "\n".join(parts) or "(no output)"
         logger.debug(f"bash_exec exit={proc.returncode}: {command[:60]}")
+        if proc.returncode != 0:
+            result = f"[exit code {proc.returncode}]\n{result}"
         return result
     except asyncio.TimeoutError:
         return f"[Error] 超時 {t}s"
