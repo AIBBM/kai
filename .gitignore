@@ -15,3 +15,11 @@ history.json
 .prompt_history
 .aider*
 images/
+
+# Runtime artifacts
+*.log
+*.png
+*.jpg
+*.jpeg
+.playwright-mcp/
+notebooks/
