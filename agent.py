@@ -381,6 +381,14 @@ class Agent:
                 )
 
             if not tool_calls:
+                if not reply_parts:
+                    # Model produced only thinking with no text — avoid polluting history with empty entry
+                    logger.warning("模型未產生文字回覆（僅思考）")
+                    if self.history and self.history[-1]["role"] == "user":
+                        self.history.pop()
+                    if on_done:
+                        await on_done(t_total, t_thinking_end and t_thinking_end - t_start, usage[0], usage[1])
+                    return
                 self.history.append(
                     {"role": "assistant", "content": "".join(reply_parts)}
                 )
