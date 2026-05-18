@@ -31,12 +31,6 @@ REGISTRY: dict[str, ModelProfile] = {
         supports_vision=False,
         num_ctx=16384,
     ),
-    "qwen3.5:0.8b": ModelProfile(
-        "qwen3.5:0.8b",
-        supports_thinking=True,
-        supports_vision=True,
-        num_ctx=8192,
-    ),
     "qwen3.5:2b": ModelProfile(
         "qwen3.5:2b",
         supports_thinking=True,
@@ -45,18 +39,6 @@ REGISTRY: dict[str, ModelProfile] = {
     ),
     "qwen3.5:4b": ModelProfile(
         "qwen3.5:4b",
-        supports_thinking=True,
-        supports_vision=True,
-        num_ctx=16384,
-    ),
-    "qwen3.5:9b": ModelProfile(
-        "qwen3.5:9b",
-        supports_thinking=True,
-        supports_vision=True,
-        num_ctx=16384,
-    ),
-    "qwen3.5:27b": ModelProfile(
-        "qwen3.5:27b",
         supports_thinking=True,
         supports_vision=True,
         num_ctx=16384,
