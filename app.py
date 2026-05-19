@@ -191,7 +191,6 @@ class ChatApp(App[None]):
             ("/cls", "清除記憶（畫面 + 對話歷史）"),
             ("/compact", "用 Gemini 壓縮對話歷史（釋放 context）"),
             ("/add", "加入檔案到上下文  /add <路徑>"),
-            ("/del", "移除上下文檔案  /del <路徑>"),
             ("/image", "傳送圖片給模型  /image <路徑> [問題]"),
             ("/debug", "切換工具除錯模式（顯示工具參數與回應）"),
             ("/think", "切換 Thinking 模式開／關"),
@@ -444,6 +443,8 @@ class ChatApp(App[None]):
                 f"# 檔案：{p}\n```\n{c}\n```" for p, c in self._context_files
             )
             full_text = f"{file_blocks}\n\n{text}"
+            self._context_files.clear()
+            self.query_one("#sidebar", Sidebar).set_files([])
         else:
             full_text = text
 
