@@ -30,7 +30,7 @@ from textual.widgets import (
 )
 
 from core.agent import Agent
-from core.config import BASH_TIMEOUT, MODEL
+from core.config import BASH_TIMEOUT, MODEL, USERNAME
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
 from widgets.utils import _IMAGE_EXTS, _SUFFIX_TO_LANG
@@ -185,6 +185,7 @@ class ChatApp(App[None]):
         self.sub_title = MODEL
         self.query_one("#prompt", HistoryInput).focus()
         self._update_prompt_title()
+        self._render_history()
         self.__class__.SLASH_COMMANDS = [
             ("/clear", "清除畫面"),
             ("/cls", "清除記憶（畫面 + 對話歷史）"),
@@ -199,6 +200,44 @@ class ChatApp(App[None]):
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
         self._mcp_done = asyncio.Event()
         self._mcp_task = asyncio.get_event_loop().create_task(self._mcp_lifecycle())
+
+    @work
+    async def _render_history(self) -> None:
+        """把 agent.history 渲染到 chat 視窗（啟動 / /cd 後呼叫）。"""
+        msgs = self.query_one("#messages", VerticalScroll)
+        for msg in self.agent.history:
+            role = msg.get("role")
+            content = msg.get("content") or ""
+            if role == "system":
+                continue
+            if role == "user":
+                if isinstance(content, list):
+                    text = next(
+                        (p.get("text", "") for p in content if p.get("type") == "text"),
+                        "",
+                    )
+                else:
+                    text = content
+                if text:
+                    await msgs.mount(
+                        Static(
+                            f"[bold]{USERNAME}[/bold]\n{text}",
+                            markup=True,
+                            classes="user-bubble",
+                        )
+                    )
+            elif role == "assistant" and content:
+                await msgs.mount(
+                    Static(
+                        f"🤖 {self.agent.profile.name}",
+                        classes="ai-header",
+                        markup=False,
+                    )
+                )
+                ai_msg = AIMessage()
+                await msgs.mount(ai_msg)
+                await ai_msg.update_content(content, final=True)
+        msgs.scroll_end(animate=False)
 
     async def _mcp_lifecycle(self) -> None:
         """Single long-lived asyncio task: MCP start → keep-alive → stop.
@@ -570,6 +609,7 @@ class ChatApp(App[None]):
         self._context_files.clear()
         self.query_one("#sidebar", Sidebar).set_files([])
         await self.query_one("#messages", VerticalScroll).remove_children()
+        self._render_history()
         self.notify(f"已切換至 {target}", severity="information")
 
     async def action_clear_screen(self) -> None:
