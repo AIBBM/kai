@@ -23,7 +23,6 @@ class ConfirmCloseScreen(ModalScreen[bool]):
         Binding("y", "confirm", "", show=False),
         Binding("n", "cancel", "", show=False),
         Binding("escape", "cancel", "", show=False),
-        Binding("enter", "confirm", "", show=False),
     ]
 
     def __init__(self, filename: str) -> None:
@@ -39,8 +38,11 @@ class ConfirmCloseScreen(ModalScreen[bool]):
             )
             yield Static("關閉後修改將遺失，確定要關閉嗎？", markup=False, classes="confirm-body")
             with Horizontal(classes="confirm-buttons"):
-                yield Button("關閉（不存檔）", variant="error", id="btn-close")
                 yield Button("取消", variant="default", id="btn-cancel")
+                yield Button("關閉（不存檔）", variant="error", id="btn-close")
+
+    def on_mount(self) -> None:
+        self.query_one("#btn-cancel", Button).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "btn-close")
