@@ -59,6 +59,28 @@ FETCH_TOOL = {
     },
 }
 
+FETCH_URLS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "fetch_urls",
+        "description": (
+            "Fetch multiple web pages concurrently (up to 5). "
+            "Use this instead of calling fetch_url repeatedly when you need to read several URLs at once."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "urls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of URLs to fetch (max 5)",
+                }
+            },
+            "required": ["urls"],
+        },
+    },
+}
+
 # 對應 ANSI escape code、控制字元、常見模型隱藏標簽
 CLEAN_PATTERN = re.compile(
     r"\x1b\[[0-9;]*[mABCDHJKSTf]"
@@ -159,29 +181,49 @@ async def web_search(query: str, num_results: int = SEARCH_NUM_RESULTS) -> str:
     return result
 
 
-async def fetch_url(url: str) -> str:
-    """用 Jina Reader 抓取網頁完整內容，回傳結構化 Markdown。"""
-    jina_url = f"https://r.jina.ai/{url}"
-    headers = {"Accept": "application/json"}
+def _jina_headers() -> dict:
+    h = {"Accept": "application/json"}
     if JINA_API_KEY:
-        headers["Authorization"] = f"Bearer {JINA_API_KEY}"
+        h["Authorization"] = f"Bearer {JINA_API_KEY}"
+    return h
+
+
+async def _fetch_one(url: str, client: httpx.AsyncClient, max_chars: int) -> str:
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(jina_url, headers=headers, follow_redirects=True)
-            resp.raise_for_status()
-            data = resp.json().get("data", {})
+        resp = await client.get(
+            f"https://r.jina.ai/{url}", headers=_jina_headers(), follow_redirects=True
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", {})
         title = data.get("title", "")
         page_url = data.get("url", url)
         content = data.get("content", "").strip()
-        if len(content) > FETCH_MAX_CHARS:
-            cut = content.rfind("\n\n", 0, FETCH_MAX_CHARS)
-            content = content[:cut if cut > 0 else FETCH_MAX_CHARS]
+        if len(content) > max_chars:
+            cut = content.rfind("\n\n", 0, max_chars)
+            content = content[: cut if cut > 0 else max_chars]
             content += f"\n\n…（共 {len(content)} 字元，已截斷）"
         logger.debug(f"fetch_url {url} → {len(content)} 字元")
         return f"# {title}\nURL: {page_url}\n\n{content}"
     except Exception as e:
         logger.warning(f"fetch_url 失敗：{url}：{e}")
         return f"[Error] fetch_url 失敗：{e}"
+
+
+async def fetch_url(url: str) -> str:
+    """用 Jina Reader 抓取單一網頁完整內容，回傳結構化 Markdown。"""
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        return await _fetch_one(url, client, FETCH_MAX_CHARS)
+
+
+async def fetch_urls(urls: list) -> str:
+    """並行抓取多個網頁（最多 5 個），共用同一個 httpx 連線池。"""
+    targets = urls[:5]
+    per_limit = max(FETCH_MAX_CHARS // len(targets), 2000)
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        results = await asyncio.gather(
+            *[_fetch_one(u, client, per_limit) for u in targets]
+        )
+    return "\n\n---\n\n".join(results)
 
 
 async def bash_exec(command: str, timeout: int = 0) -> str:
