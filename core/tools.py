@@ -159,7 +159,8 @@ async def bash_exec(command: str, timeout: int = 0) -> str:
         if out:
             parts.append(out)
         if err:
-            parts.append(f"[stderr]\n{err}")
+            # exit 0 時 stderr 通常是進度訊息（uv/cargo/npm 等工具的慣例）
+            parts.append(f"[stderr]\n{err}" if proc.returncode != 0 else err)
         result = "\n".join(parts) or "(no output)"
         logger.debug(f"bash_exec exit={proc.returncode}: {command[:60]}")
         if proc.returncode != 0:
