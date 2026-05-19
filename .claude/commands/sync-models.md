@@ -11,24 +11,32 @@
    - context length（max ctx）
    - quantization
 
-3. 讀取 `core/models.py` 目前的 REGISTRY
+3. 執行 `ollama show <model> --modelfile` 檢查 TEMPLATE，判斷實際能力：
 
-4. **比對差異**：
+   **supports_tools 判斷（template 優先，名稱為輔）**：
+   - template 含 `.Tools` 且有 `<tool_call>` 或 `tool_call` 格式 → `True`
+   - template 不含 `.Tools` → `False`
+   - 無法判斷時：名稱含 `coder` 的舊版模型預設 `False`，其餘 `True`
+
+   **supports_thinking 判斷（template 優先，名稱為輔）**：
+   - template 含 `.Thinking` 或 `<think>` 或 `thinking` 關鍵字 → `True`
+   - 名稱含 `r1`、`qwq`、`qwen3`（非 qwen3.5:2b）、`gemma4`、`gemini-2.5` → `True`
+   - qwen3.5:2b 例外：即使 template 支援，`supports_thinking=False`（2B 推理能力不足）
+
+   **supports_vision 判斷（名稱為主）**：
+   - 名稱含 `vl`、`vision`、`llava`、`gemma`、`qwen3.5` → `True`
+
+4. 讀取 `core/models.py` 目前的 REGISTRY
+
+5. **比對差異**：
    - 已安裝但不在 REGISTRY → 新增（用下方規則推算 num_ctx）
    - 在 REGISTRY（非 Gemini）但未安裝 → 移除
-   - 已在 REGISTRY 的模型 → 保留不動（不覆蓋已調整過的設定）
+   - 已在 REGISTRY 的模型 → **重新驗證 supports_tools / supports_thinking**（template 是事實來源），num_ctx 保留不動
 
-5. **新模型 num_ctx 推算規則（RTX 3050 4 GB）**：
+6. **新模型 num_ctx 推算規則（RTX 3050 4 GB）**：
    - 模型 < 2 GB：16384
-   - 模型 2–3 GB：8192
-   - 模型 3–4 GB：8192（部分 KV spill 到 RAM）
+   - 模型 2–4 GB：8192（部分 KV 可 spill 到 RAM）
    - 模型 > 4 GB（GPU 放不下）：8192
-
-6. **新模型 capability 推算規則**：
-   - 名稱含 `vl`、`vision`、`llava`、`gemma` → `supports_vision=True`
-   - 名稱含 `r1`、`qwq`、`qwen3`、`gemma4`、`gemini-2.5` → `supports_thinking=True`
-   - 名稱含 `coder` 且 Ollama template 已知不含 function calling → `supports_tools=False`
-   - 其餘預設 `supports_tools=True`
 
 7. 更新 `core/models.py`：保留 Gemini section，ollama 區塊依安裝清單重寫
 
