@@ -183,6 +183,51 @@ class Agent:
         except Exception as e:
             logger.warning(f"儲存歷史失敗：{e}")
 
+    async def compact_history(self) -> str:
+        """用 gemini-2.0-flash 摘要現有 history，壓縮 context。回傳摘要文字。"""
+        if not self._gemini:
+            raise RuntimeError("需要 GEMINI_API_KEY 才能使用 compact")
+
+        parts = []
+        for msg in self.history:
+            role = msg.get("role")
+            content = msg.get("content") or ""
+            if role == "system":
+                continue
+            if isinstance(content, list):
+                content = next(
+                    (p.get("text", "") for p in content if p.get("type") == "text"), ""
+                )
+            if content:
+                label = "使用者" if role == "user" else "助理"
+                parts.append(f"[{label}]\n{content}")
+
+        if not parts:
+            return ""
+
+        conversation = "\n\n---\n\n".join(parts)
+        prompt = (
+            "請將以下對話歷史精簡摘要，繁體中文輸出，保留：\n"
+            "1. 使用者的主要目標與需求\n"
+            "2. 重要決策、結論、已完成的事\n"
+            "3. 關鍵程式碼片段或技術細節\n"
+            "4. 待辦事項或未完成的工作\n\n"
+            f"對話歷史：\n\n{conversation}"
+        )
+
+        resp = await self._gemini.chat.completions.create(
+            model="gemini-2.0-flash",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+        summary = resp.choices[0].message.content or ""
+
+        system = [m for m in self.history if m["role"] == "system"]
+        self.history = system + [{"role": "assistant", "content": f"[對話摘要]\n{summary}"}]
+        self.save_history()
+        logger.info(f"compact_history 完成，history 壓縮至 {len(self.history)} 則")
+        return summary
+
     def _trim_history(self) -> list[dict]:
         """保留 system message + 最近 HISTORY_KEEP 則訊息。"""
         system = [m for m in self.history if m["role"] == "system"]

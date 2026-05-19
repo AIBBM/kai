@@ -189,6 +189,7 @@ class ChatApp(App[None]):
         self.__class__.SLASH_COMMANDS = [
             ("/clear", "清除畫面"),
             ("/cls", "清除記憶（畫面 + 對話歷史）"),
+            ("/compact", "用 Gemini 壓縮對話歷史（釋放 context）"),
             ("/add", "加入檔案到上下文  /add <路徑>"),
             ("/del", "移除上下文檔案  /del <路徑>"),
             ("/image", "傳送圖片給模型  /image <路徑> [問題]"),
@@ -378,6 +379,8 @@ class ChatApp(App[None]):
                 await self.action_clear_screen()
             elif cmd == "/cls":
                 await self.action_clear()
+            elif cmd == "/compact":
+                await self.action_compact()
             elif cmd == "/model" and arg:
                 await self.action_switch_model(arg)
             elif cmd == "/model":
@@ -612,6 +615,21 @@ class ChatApp(App[None]):
         self._render_history()
         self.notify(f"已切換至 {target}", severity="information")
 
+    async def action_compact(self) -> None:
+        if not self.agent._gemini:
+            self.notify("需要 GEMINI_API_KEY 才能使用 compact", severity="warning")
+            return
+        msgs = self.query_one("#messages", VerticalScroll)
+        await msgs.mount(Static("⚡ 正在用 Gemini 壓縮對話歷史…", classes="error-msg", markup=False))
+        msgs.scroll_end(animate=False)
+        try:
+            await self.agent.compact_history()
+            await msgs.remove_children()
+            self._render_history()
+            self.notify("✅ 對話已壓縮", severity="information")
+        except Exception as e:
+            self.notify(f"compact 失敗：{e}", severity="error")
+
     async def action_clear_screen(self) -> None:
         await self.query_one("#messages", VerticalScroll).remove_children()
 
@@ -811,9 +829,35 @@ class ChatApp(App[None]):
                 await stream_msg.update_content("".join(buf), final=True)
 
         except Exception as e:
-            logger.exception("chat error")
-            await msgs.mount(Static(f"❌ 錯誤：{e}", classes="error-msg", markup=False))
-            msgs.scroll_end(animate=False)
+            err_str = str(e).lower()
+            if any(kw in err_str for kw in ("context", "too long", "window", "kv cache")) and self.agent._gemini:
+                # Context overflow → auto compact via gemini-2.0-flash，然後重試
+                try:
+                    await msgs.mount(Static("⚡ Context 已滿，正在用 Gemini 壓縮對話歷史…", classes="error-msg", markup=False))
+                    msgs.scroll_end(animate=False)
+                    await self.agent.compact_history()
+                    await msgs.mount(Static("✅ 已壓縮，繼續對話", classes="error-msg", markup=False))
+                    msgs.scroll_end(animate=False)
+                    stream_msg = None
+                    buf.clear()
+                    await self.agent.chat(
+                        user_msg,
+                        on_token=on_token,
+                        on_thinking=on_thinking,
+                        on_done=on_done,
+                        on_tool_call=on_tool_call,
+                        on_retry=on_retry,
+                    )
+                    if stream_msg and buf:
+                        await stream_msg.update_content("".join(buf), final=True)
+                except Exception as e2:
+                    logger.exception("compact + retry error")
+                    await msgs.mount(Static(f"❌ 壓縮後仍失敗：{e2}", classes="error-msg", markup=False))
+                    msgs.scroll_end(animate=False)
+            else:
+                logger.exception("chat error")
+                await msgs.mount(Static(f"❌ 錯誤：{e}", classes="error-msg", markup=False))
+                msgs.scroll_end(animate=False)
 
         finally:
             timer.stop()
