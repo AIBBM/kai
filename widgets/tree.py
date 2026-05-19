@@ -168,7 +168,7 @@ class FileTree(Widget):
             node.add_leaf("🔒 無權限", data=None)
             return
         for entry in entries:
-            if entry.name.startswith(".") or entry.name in _HIDDEN_DIRS:
+            if entry.name in _HIDDEN_DIRS:
                 continue
             if entry.is_dir():
                 child = node.add(f"📁 {entry.name}", data=entry)

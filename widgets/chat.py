@@ -1,4 +1,4 @@
-"""Chat display widgets: ImageBubble, FileViewer, CopyButton, CapabilityBadge, CapLabel, AIMessage."""
+"""Chat display widgets: ImageBubble, FileViewer, CopyButton, CapabilityBadge, CapLabel, AIMessage, ConfirmCloseScreen."""
 from __future__ import annotations
 
 import asyncio
@@ -7,11 +7,49 @@ from pathlib import Path
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.events import Click
+from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, Markdown, Static, Tab, TextArea
 
 from .utils import _copy_to_clipboard, _line_height, _open_image
+
+
+class ConfirmCloseScreen(ModalScreen[bool]):
+    """未存檔關閉確認對話框。"""
+
+    BINDINGS = [
+        Binding("y", "confirm", "", show=False),
+        Binding("n", "cancel", "", show=False),
+        Binding("escape", "cancel", "", show=False),
+        Binding("enter", "confirm", "", show=False),
+    ]
+
+    def __init__(self, filename: str) -> None:
+        super().__init__()
+        self._filename = filename
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="confirm-dialog"):
+            yield Static(
+                f"[bold]{self._filename}[/bold] 有未存檔的修改",
+                markup=True,
+                classes="confirm-title",
+            )
+            yield Static("關閉後修改將遺失，確定要關閉嗎？", markup=False, classes="confirm-body")
+            with Horizontal(classes="confirm-buttons"):
+                yield Button("關閉（不存檔）", variant="error", id="btn-close")
+                yield Button("取消", variant="default", id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "btn-close")
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class ImageBubble(Widget):
@@ -59,7 +97,7 @@ class FileViewer(TextArea):
     def on_mount(self) -> None:
         self._modified = False  # 載入時的初始化不算修改
 
-    def on_text_changed(self, event: TextArea.Changed) -> None:
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if not self._modified and self._file_path:
             self._modified = True
             self._set_tab_title(modified=True)

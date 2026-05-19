@@ -324,3 +324,37 @@ AutoComplete .autocomplete--highlight-match {
     background: $primary-background;
     color: $accent;
 }
+
+/* ─── 未存檔關閉確認對話框 ─── */
+ConfirmCloseScreen {
+    align: center middle;
+}
+
+.confirm-dialog {
+    width: 50;
+    height: auto;
+    background: $surface;
+    border: tall $primary;
+    padding: 1 2;
+}
+
+.confirm-title {
+    text-align: center;
+    margin-bottom: 1;
+}
+
+.confirm-body {
+    text-align: center;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+.confirm-buttons {
+    align: center middle;
+    height: auto;
+    margin-top: 1;
+}
+
+.confirm-buttons Button {
+    margin: 0 1;
+}

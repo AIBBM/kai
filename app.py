@@ -34,7 +34,7 @@ from core.config import BASH_TIMEOUT, MODEL
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
 from widgets.utils import _IMAGE_EXTS, _SUFFIX_TO_LANG
-from widgets.chat import AIMessage, CapabilityBadge, CapLabel, FileViewer, ImageBubble
+from widgets.chat import AIMessage, CapabilityBadge, CapLabel, ConfirmCloseScreen, FileViewer, ImageBubble
 from widgets.commands import ChatCommands
 from widgets.input import ChatAutoComplete, HistoryInput
 from widgets.sidebar import ResizeHandle, Sidebar
@@ -484,9 +484,7 @@ class ChatApp(App[None]):
         tab_id = wid[len("--content-tab-"):]
         if event.screen_x >= region.x + region.width - 2:
             event.stop()
-            tc = self.query_one("#center-tabs", TabbedContent)
-            self._open_file_tabs.pop(tab_id, None)
-            await tc.remove_pane(tab_id)
+            await self._maybe_close_tab(tab_id)
 
     def on_file_tree_file_chosen(self, event: FileTree.FileChosen) -> None:
         path = event.path
@@ -531,8 +529,23 @@ class ChatApp(App[None]):
         active_id = tc.active
         if not active_id or active_id == "chat":
             return
-        self._open_file_tabs.pop(active_id, None)
-        await tc.remove_pane(active_id)
+        await self._maybe_close_tab(active_id)
+
+    async def _maybe_close_tab(self, tab_id: str) -> None:
+        """關閉 tab，若有未存檔修改則先詢問確認。"""
+        try:
+            pane = self.query_one(f"TabPane#{tab_id}")
+            viewer = pane.query_one(FileViewer)
+            if viewer._modified:
+                fname = viewer._file_path.name if viewer._file_path else "檔案"
+                confirmed = await self.push_screen_wait(ConfirmCloseScreen(fname))
+                if not confirmed:
+                    return
+        except Exception:
+            pass
+        self._open_file_tabs.pop(tab_id, None)
+        tc = self.query_one("#center-tabs", TabbedContent)
+        await tc.remove_pane(tab_id)
 
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#sidebar", Sidebar)
