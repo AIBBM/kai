@@ -769,6 +769,10 @@ class ChatApp(App[None]):
                     "Traceback (most recent call last)",
                 )
                 is_err = any(kw in result for kw in _ERR_PREFIXES)
+                # 檔案系統變更工具：成功時刷新檔案樹
+                _FS_MUTATING = {"write_file", "create_directory", "move_file", "delete_file", "edit_file"}
+                if not is_err and name in _FS_MUTATING:
+                    self.query_one("#file-tree", FileTree).refresh_tree()
                 icon = "❌" if is_err else "🔧"
                 card_class = "tool-debug tool-debug-error" if is_err else "tool-debug"
                 if not self._debug_tools:
