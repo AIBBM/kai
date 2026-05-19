@@ -532,20 +532,24 @@ class ChatApp(App[None]):
         await self._maybe_close_tab(active_id)
 
     async def _maybe_close_tab(self, tab_id: str) -> None:
-        """關閉 tab，若有未存檔修改則先詢問確認。"""
+        """關閉 tab，若有未存檔修改則先以 modal 詢問確認。"""
         try:
             pane = self.query_one(f"TabPane#{tab_id}")
             viewer = pane.query_one(FileViewer)
             if viewer._modified:
                 fname = viewer._file_path.name if viewer._file_path else "檔案"
-                confirmed = await self.push_screen_wait(ConfirmCloseScreen(fname))
-                if not confirmed:
-                    return  # 使用者取消 → tab 保持開啟
+
+                def _on_confirm(confirmed: bool | None) -> None:
+                    if confirmed:
+                        self._open_file_tabs.pop(tab_id, None)
+                        self.query_one("#center-tabs", TabbedContent).remove_pane(tab_id)
+
+                self.push_screen(ConfirmCloseScreen(fname), callback=_on_confirm)
+                return  # 等 callback 決定是否關閉
         except Exception:
-            pass  # 找不到 FileViewer → 直接關閉（非編輯 tab）
+            pass
         self._open_file_tabs.pop(tab_id, None)
-        tc = self.query_one("#center-tabs", TabbedContent)
-        await tc.remove_pane(tab_id)
+        await self.query_one("#center-tabs", TabbedContent).remove_pane(tab_id)
 
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#sidebar", Sidebar)
