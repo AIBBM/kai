@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -118,6 +119,7 @@ class ChatApp(App[None]):
     BINDINGS = [
         Binding("ctrl+q", "quit", "退出"),
         Binding("ctrl+p", "command_palette", "命令"),
+        Binding("ctrl+l", "clear_screen", "清除畫面"),
         Binding("ctrl+t", "toggle_file_tree", "檔案樹"),
         Binding("ctrl+b", "toggle_sidebar", "側邊欄"),
         Binding("ctrl+w", "close_tab", "關閉標籤", priority=True),
@@ -248,7 +250,10 @@ class ChatApp(App[None]):
             hist.pop()
         self.agent.save_history()
         if self._bash_proc and self._bash_proc.returncode is None:
-            self._bash_proc.kill()
+            try:
+                os.killpg(os.getpgid(self._bash_proc.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
         self.exit()
 
     def on_unmount(self) -> None:
@@ -509,10 +514,10 @@ class ChatApp(App[None]):
         lang = _SUFFIX_TO_LANG.get(path.suffix.lower())
         ta = FileViewer(
             content,
-            read_only=True,
             language=lang,
             show_line_numbers=True,
             soft_wrap=False,
+            file_path=path,
         )
         self._open_file_tabs[tab_id] = path
         await tc.add_pane(TabPane(f"{path.name} ×", ta, id=tab_id))
@@ -546,6 +551,9 @@ class ChatApp(App[None]):
         self.query_one("#sidebar", Sidebar).set_files([])
         await self.query_one("#messages", VerticalScroll).remove_children()
         self.notify(f"已切換至 {target}", severity="information")
+
+    async def action_clear_screen(self) -> None:
+        await self.query_one("#messages", VerticalScroll).remove_children()
 
     async def action_clear(self) -> None:
         await self.query_one("#messages", VerticalScroll).remove_children()
@@ -794,6 +802,7 @@ class ChatApp(App[None]):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                start_new_session=True,
             )
             self._bash_proc = proc
             out_widget = Static(Text(""), markup=False, classes="bash-output")
@@ -823,7 +832,10 @@ class ChatApp(App[None]):
                     timeout=BASH_TIMEOUT,
                 )
             except asyncio.TimeoutError:
-                proc.kill()
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
                 await proc.communicate()
                 lines.append(f"\n⏱ 逾時（>{BASH_TIMEOUT}s）")
                 _refresh()
@@ -846,8 +858,11 @@ class ChatApp(App[None]):
     def action_cancel_stream(self) -> None:
         self.agent._cancelled = True
         if self._bash_proc and self._bash_proc.returncode is None:
-            self._bash_proc.kill()
-        if self._bash_worker and not self._bash_worker.is_done:
+            try:
+                os.killpg(os.getpgid(self._bash_proc.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        if self._bash_worker and self._bash_worker.is_running:
             self._bash_worker.cancel()
 
 

@@ -94,8 +94,7 @@ class ChatAutoComplete(AutoComplete):
             last = tokens[-1] if not text.endswith(" ") else ""
             if not last or last == cmd0:
                 return ""
-            path_like = "." in last or "/" in last or last.startswith("~")
-            if not last.startswith("-") and path_like:
+            if not last.startswith("-"):
                 return last
         return ""
 
@@ -135,8 +134,7 @@ class ChatAutoComplete(AutoComplete):
             last = tokens[-1] if not text.endswith(" ") else ""
             if not last or last == cmd0:
                 return []
-            path_like = "." in last or "/" in last or last.startswith("~")
-            if not last.startswith("-") and path_like:
+            if not last.startswith("-"):
                 if cmd0 == "cd":
                     return self._dir_items(last)
                 return self._file_items(last)

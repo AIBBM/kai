@@ -6,9 +6,10 @@ from pathlib import Path
 
 from textual import work
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.events import Click
 from textual.widget import Widget
-from textual.widgets import Button, Markdown, Static, TextArea
+from textual.widgets import Button, Markdown, Static, Tab, TextArea
 
 from .utils import _copy_to_clipboard, _line_height, _open_image
 
@@ -46,7 +47,45 @@ class ImageBubble(Widget):
 
 
 class FileViewer(TextArea):
-    """唯讀檔案檢視器，覆寫 Ctrl+C 以支援 WSL 多行複製。"""
+    """檔案檢視與編輯器：Ctrl+S 存檔、Ctrl+C 多行複製（WSL）、修改時 tab 標題加 ●。"""
+
+    BINDINGS = [Binding("ctrl+s", "save", "儲存")]
+
+    def __init__(self, *args, file_path: Path | None = None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._file_path = file_path
+        self._modified = False
+
+    def on_mount(self) -> None:
+        self._modified = False  # 載入時的初始化不算修改
+
+    def on_text_changed(self, event: TextArea.Changed) -> None:
+        if not self._modified and self._file_path:
+            self._modified = True
+            self._set_tab_title(modified=True)
+
+    def _set_tab_title(self, modified: bool) -> None:
+        if not self._file_path or not self.parent:
+            return
+        tab_id = self.parent.id
+        try:
+            tab = self.app.query_one(f"Tab#--content-tab-{tab_id}", Tab)
+            prefix = "● " if modified else ""
+            tab.label = f"{prefix}{self._file_path.name} ×"
+        except Exception:
+            pass
+
+    def action_save(self) -> None:
+        if not self._file_path:
+            self.app.notify("無法儲存：無檔案路徑", severity="warning")
+            return
+        try:
+            self._file_path.write_text(self.text, encoding="utf-8")
+            self._modified = False
+            self._set_tab_title(modified=False)
+            self.app.notify(f"已儲存 {self._file_path.name}", timeout=1.5)
+        except Exception as e:
+            self.app.notify(f"儲存失敗：{e}", severity="error")
 
     def action_copy(self) -> None:
         text = self.selected_text
@@ -55,13 +94,9 @@ class FileViewer(TextArea):
         sel = self.selection
         start_line = sel.start[0] + 1
         end_line = sel.end[0] + 1
-        tab_id = self.parent.id if self.parent else None
-        file_path: Path | None = (
-            self.app._open_file_tabs.get(tab_id) if tab_id else None  # type: ignore[attr-defined]
-        )
         self.app._last_file_copy = {  # type: ignore[attr-defined]
             "text": text,
-            "path": file_path,
+            "path": self._file_path,
             "start_line": start_line,
             "end_line": end_line,
         }
