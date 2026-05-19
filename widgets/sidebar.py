@@ -55,10 +55,6 @@ class Sidebar(Widget):
         yield Static(os.getcwd(), classes="sidebar-content", id="sb-cwd", markup=False)
         yield Static("🤖 模型", classes="sidebar-title", markup=True)
         yield Static(MODEL, classes="sidebar-content", id="sb-model", markup=False)
-        yield Static("📄 上下文檔案", classes="sidebar-title", markup=True)
-        yield Static(
-            "[dim]（無）[/dim]", classes="sidebar-content", id="sb-files", markup=True
-        )
         yield Static("📋 Git 變更", classes="sidebar-title", markup=True)
         yield Static("", classes="sidebar-content", id="sb-git", markup=True)
         yield Static("🔧 MCP 工具", classes="sidebar-title", markup=True)
@@ -94,14 +90,6 @@ class Sidebar(Widget):
 
     def set_model(self, name: str) -> None:
         self.query_one("#sb-model", Static).update(name)
-
-    def set_files(self, paths: list[str]) -> None:
-        text = (
-            "\n".join(f"[green]✓[/green] {p}" for p in paths)
-            if paths
-            else "[dim]（無）[/dim]"
-        )
-        self.query_one("#sb-files", Static).update(text)
 
     def set_mcp(self, summary: dict[str, int]) -> None:
         if summary:

@@ -73,18 +73,29 @@ class HistoryInput(Input):
 
 
 class ChatAutoComplete(AutoComplete):
-    """動態補全：斜線指令、/add /del /image 路徑、! bash 路徑。"""
+    """動態補全：斜線指令、@path 檔案、/image 路徑、! bash 路徑。"""
+
+    def _at_prefix(self, text: str) -> str | None:
+        """回傳游標前最後一個 @ 之後的路徑片段；@ 後有空白表示已完成，回傳 None。"""
+        idx = text.rfind("@")
+        if idx == -1:
+            return None
+        if idx > 0 and text[idx - 1] not in " \t":
+            return None  # @ 夾在字中間（如 email）
+        fragment = text[idx + 1:]
+        if " " in fragment:
+            return None  # @ mention 已完成
+        return fragment
 
     def get_search_string(self, state: TargetState) -> str:
         text = state.text
-        if text.startswith("/add "):
-            return text[5:]
-        if text.startswith("/del "):
-            return text[5:]
         if text.startswith("/image "):
             return text[7:]
         if text.startswith("/"):
             return text
+        at = self._at_prefix(text)
+        if at is not None:
+            return at
         if text.startswith("!"):
             cmd_part = text[1:]
             tokens = cmd_part.split()
@@ -100,24 +111,16 @@ class ChatAutoComplete(AutoComplete):
 
     def should_show_dropdown(self, search_string: str) -> bool:
         text = self._target_state.text
-        if text.startswith(("/add ", "/del ", "/image ")):
+        if text.startswith("/image "):
+            return self.option_list.option_count > 0
+        if self._at_prefix(text) is not None:
             return self.option_list.option_count > 0
         return super().should_show_dropdown(search_string)
 
     def get_candidates(self, state: TargetState) -> list[DropdownItem]:
         text = state.text
-        if text.startswith("/add "):
-            return self._file_items(text[5:])
         if text.startswith("/image "):
             return self._image_items(text[7:])
-        if text.startswith("/del "):
-            ctx = getattr(self.app, "_context_files", [])
-            search = text[5:].lower()
-            return [
-                DropdownItem(main=fp, prefix="🗑 ")
-                for fp, _ in ctx
-                if not search or search in fp.lower()
-            ][:20]
         if text.startswith("/"):
             cmds = getattr(self.app, "SLASH_COMMANDS", [])
             return [
@@ -125,6 +128,9 @@ class ChatAutoComplete(AutoComplete):
                 for cmd, desc in cmds
                 if text == "/" or cmd.startswith(text) or text[1:] in cmd
             ]
+        at = self._at_prefix(text)
+        if at is not None:
+            return self._file_items(at)
         if text.startswith("!"):
             cmd_part = text[1:]
             tokens = cmd_part.split()
@@ -196,14 +202,18 @@ class ChatAutoComplete(AutoComplete):
     def apply_completion(self, value: str, state: TargetState) -> None:
         text = state.text
         target = self.target
-        if text.startswith(("/add ", "/del ", "/image ")):
-            slash_end = text.index(" ") + 1
-            new_val = text[:slash_end] + value
+        if text.startswith("/image "):
+            new_val = "/image " + value
             target.value = new_val
             target.cursor_position = len(new_val)
         elif text.startswith("/"):
             target.value = value
             target.cursor_position = len(value)
+        elif self._at_prefix(text) is not None:
+            at_idx = text.rfind("@")
+            new_val = text[:at_idx + 1] + value
+            target.value = new_val
+            target.cursor_position = len(new_val)
         elif text.startswith("!"):
             last_space = text.rfind(" ")
             base = text[: last_space + 1] if last_space >= 0 else "!"

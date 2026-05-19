@@ -138,7 +138,7 @@ class ChatApp(App[None]):
         self.scroll_sensitivity_y = 5.0
         self._spin_idx = 0
         self._spin_label = "生成中"
-        self._context_files: list[tuple[str, str]] = []
+        self._at_mention_re = re.compile(r'(?:(?<=\s)|^)@(\S+)')
         self._debug_tools = False
         self._think_override: bool | None = None
         self._input_history: list[str] = _load_prompt_history()
@@ -190,7 +190,6 @@ class ChatApp(App[None]):
             ("/clear", "清除畫面"),
             ("/cls", "清除記憶（畫面 + 對話歷史）"),
             ("/compact", "用 Gemini 壓縮對話歷史（釋放 context）"),
-            ("/add", "加入檔案到上下文  /add <路徑>"),
             ("/image", "傳送圖片給模型  /image <路徑> [問題]"),
             ("/debug", "切換工具除錯模式（顯示工具參數與回應）"),
             ("/think", "切換 Thinking 模式開／關"),
@@ -384,14 +383,6 @@ class ChatApp(App[None]):
                 await self.action_switch_model(arg)
             elif cmd == "/model":
                 self.notify("用法：/model <模型名稱>", severity="warning")
-            elif cmd == "/add" and arg:
-                await self._add_file(arg)
-            elif cmd == "/add":
-                self.notify("用法：/add <檔案路徑>", severity="warning")
-            elif cmd == "/del" and arg:
-                await self._del_file(arg)
-            elif cmd == "/del":
-                self.notify("用法：/del <路徑>", severity="warning")
             elif cmd == "/debug":
                 self._debug_tools = not self._debug_tools
                 label = "🔧 開啟" if self._debug_tools else "關閉"
@@ -438,13 +429,12 @@ class ChatApp(App[None]):
         )
         msgs.scroll_end(animate=False)
 
-        if self._context_files:
+        at_files = self._parse_at_files(text)
+        if at_files:
             file_blocks = "\n\n".join(
-                f"# 檔案：{p}\n```\n{c}\n```" for p, c in self._context_files
+                f"# 檔案：{p}\n```\n{c}\n```" for p, c in at_files
             )
             full_text = f"{file_blocks}\n\n{text}"
-            self._context_files.clear()
-            self.query_one("#sidebar", Sidebar).set_files([])
         else:
             full_text = text
 
@@ -452,34 +442,20 @@ class ChatApp(App[None]):
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
-    async def _del_file(self, path: str) -> None:
-        p = str(Path(path).expanduser().resolve())
-        before = len(self._context_files)
-        self._context_files = [(fp, fc) for fp, fc in self._context_files if fp != p]
-        if len(self._context_files) < before:
-            self.query_one("#sidebar", Sidebar).set_files(
-                [fp for fp, _ in self._context_files]
-            )
-            self.notify(f"已移除：{Path(p).name}", severity="information")
-        else:
-            self.notify(f"找不到：{path}", severity="warning")
-
-    async def _add_file(self, path: str) -> None:
-        try:
-            p = Path(path).expanduser().resolve()
-            content = p.read_text(encoding="utf-8", errors="replace")
-            self._context_files = [
-                (fp, fc) for fp, fc in self._context_files if fp != str(p)
-            ]
-            self._context_files.append((str(p), content))
-            self.query_one("#sidebar", Sidebar).set_files(
-                [fp for fp, _ in self._context_files]
-            )
-            self.notify(
-                f"已加入：{p.name}（{len(content)} 字元）", severity="information"
-            )
-        except Exception as e:
-            self.notify(f"無法讀取 {path}：{e}", severity="error")
+    def _parse_at_files(self, text: str) -> list[tuple[str, str]]:
+        """解析訊息中的 @path，回傳 [(resolved_path, content)]，重複路徑只讀一次。"""
+        files: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for m in self._at_mention_re.finditer(text):
+            raw = m.group(1)
+            try:
+                p = Path(raw).expanduser().resolve()
+                if p.is_file() and str(p) not in seen:
+                    seen.add(str(p))
+                    files.append((str(p), p.read_text(encoding="utf-8", errors="replace")))
+            except Exception:
+                pass
+        return files
 
     def _update_prompt_title(self) -> None:
         base = "Duncan ❯"
@@ -610,8 +586,6 @@ class ChatApp(App[None]):
         self.query_one("#sb-cwd", Static).update(str(target))
         self.query_one("#file-tree", FileTree).refresh_tree()
         self.agent.reset_history()
-        self._context_files.clear()
-        self.query_one("#sidebar", Sidebar).set_files([])
         await self.query_one("#messages", VerticalScroll).remove_children()
         self._render_history()
         self.notify(f"已切換至 {target}", severity="information")
@@ -639,8 +613,6 @@ class ChatApp(App[None]):
         self.agent.history = []
         self.agent._reset_date()
         self.agent.save_history()
-        self._context_files.clear()
-        self.query_one("#sidebar", Sidebar).set_files([])
         self.sub_title = self.agent.profile.name
 
     async def action_switch_model(self, model_name: str) -> None:
