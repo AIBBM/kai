@@ -24,6 +24,7 @@
 
    **例外（覆蓋 capabilities 的刻意設定，不要修改）**：
    - `qwen3.5:2b`：`supports_thinking=False`（Ollama 雖回報 thinking，但 2B 推理品質差，開啟只增加延遲）
+   - `qwen2.5-coder:3b`：`supports_tools=False`（Ollama 0.24 不解析此 template 的 `<tool_call>`，tool call 輸出為純文字 content）
 
 4. 讀取 `core/models.py` 目前的 REGISTRY
 

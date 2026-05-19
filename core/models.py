@@ -32,7 +32,7 @@ REGISTRY: dict[str, ModelProfile] = {
         "qwen2.5-coder:3b",
         supports_thinking=False,
         supports_vision=False,
-        supports_tools=True,
+        supports_tools=False,  # Ollama 0.24 不解析此 template 的 tool_call，輸出為純文字
         num_ctx=8192,
     ),
     "qwen3.5:2b": ModelProfile(
