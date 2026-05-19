@@ -1,4 +1,5 @@
 """Textual TUI for qwen-agent.  Run: uv run python app.py"""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,27 +11,38 @@ import time
 from functools import partial
 from pathlib import Path
 
+from loguru import logger
 from rich.text import Text
-
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, VerticalScroll
-from textual import events
 from textual.events import Click
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.message import Message
-from textual.widgets import Button, Collapsible, Footer, Header, Input, Markdown, OptionList, Static, TabbedContent, TabPane, TextArea, Tree
+from textual.widgets import (
+    Button,
+    Collapsible,
+    Footer,
+    Header,
+    Input,
+    Markdown,
+    OptionList,
+    Static,
+    TabbedContent,
+    TabPane,
+    TextArea,
+    Tree,
+)
 from textual.widgets._tree import TreeNode
-from textual import work
-from loguru import logger
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
 from agent import Agent
 from config import BASH_TIMEOUT, MODEL
-from models import REGISTRY
 from mcp_client import MCPClient, load_mcp_servers
+from models import REGISTRY
 
 logger.remove()
 logger.add(
@@ -70,6 +82,7 @@ def _load_prompt_history() -> list[str]:
 def _append_prompt_history(text: str) -> None:
     """將一筆輸入追加到 prompt_toolkit FileHistory 格式的檔案。"""
     from datetime import datetime
+
     lines = "\n".join(f"+{ln}" for ln in text.splitlines())
     entry = f"# {datetime.now()}\n{lines}\n\n"
     try:
@@ -121,7 +134,7 @@ class HistoryInput(Input):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._undo_stack: list[tuple[str, int]] = []
-        self._multiline_paste: str | None = None   # 暫存多行貼上內容
+        self._multiline_paste: str | None = None  # 暫存多行貼上內容
         self._multiline_marker: str | None = None  # 對應的佔位摘要字串
 
     def on_paste(self, event: events.Paste) -> None:
@@ -165,31 +178,154 @@ class HistoryInput(Input):
                 self.value = val
                 self.cursor_position = min(pos, len(val))
         else:
-            _SAVE_BEFORE = frozenset({"backspace", "delete", "ctrl+backspace", "ctrl+delete"})
+            _SAVE_BEFORE = frozenset(
+                {"backspace", "delete", "ctrl+backspace", "ctrl+delete"}
+            )
             if event.key in _SAVE_BEFORE or len(event.key) == 1:
                 self._undo_stack.append((self.value, self.cursor_position))
                 if len(self._undo_stack) > 200:
                     del self._undo_stack[:-200]
 
 
-_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"})
-_HIDDEN_DIRS = frozenset({"__pycache__", ".git", ".venv", "node_modules", ".mypy_cache", ".ruff_cache"})
+_IMAGE_EXTS = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"}
+)
+_HIDDEN_DIRS = frozenset(
+    {"__pycache__", ".git", ".venv", "node_modules", ".mypy_cache", ".ruff_cache"}
+)
+
+_EXT_ICONS: dict[str, str] = {
+    # Python
+    ".py": "🐍",
+    ".pyi": "🐍",
+    ".ipynb": "📓",
+    # Web
+    ".html": "🌐",
+    ".htm": "🌐",
+    ".css": "🎨",
+    ".scss": "🎨",
+    ".sass": "🎨",
+    ".js": "📜",
+    ".mjs": "📜",
+    ".cjs": "📜",
+    ".ts": "📘",
+    ".tsx": "📘",
+    ".jsx": "📜",
+    # Data / config
+    ".json": "📋",
+    ".jsonc": "📋",
+    ".json5": "📋",
+    ".yaml": "⚙️ ",
+    ".yml": "⚙️ ",
+    ".toml": "⚙️ ",
+    ".ini": "⚙️ ",
+    ".cfg": "⚙️ ",
+    ".conf": "⚙️ ",
+    ".env": "🔑",
+    ".env.local": "🔑",
+    ".env.example": "🔑",
+    # Docs
+    ".md": "📝",
+    ".mdx": "📝",
+    ".rst": "📝",
+    ".txt": "📝",
+    # Shell
+    ".sh": "⚡",
+    ".bash": "⚡",
+    ".zsh": "⚡",
+    ".fish": "⚡",
+    # Images
+    ".png": "🖼 ",
+    ".jpg": "🖼 ",
+    ".jpeg": "🖼 ",
+    ".gif": "🖼 ",
+    ".webp": "🖼 ",
+    ".bmp": "🖼 ",
+    ".tiff": "🖼 ",
+    ".tif": "🖼 ",
+    ".svg": "🖼 ",
+    ".ico": "🖼 ",
+    # Compiled / binary
+    ".pyc": "⚙️ ",
+    ".so": "⚙️ ",
+    ".dll": "⚙️ ",
+    ".exe": "⚙️ ",
+    # Archives
+    ".zip": "📦",
+    ".tar": "📦",
+    ".gz": "📦",
+    ".bz2": "📦",
+    ".xz": "📦",
+    ".7z": "📦",
+    # Database
+    ".db": "🗄️ ",
+    ".sqlite": "🗄️ ",
+    ".sqlite3": "🗄️ ",
+    # Lock / deps
+    ".lock": "🔒",
+    # Docker / CI
+    "dockerfile": "🐳",
+    ".dockerignore": "🐳",
+    # Git
+    ".gitignore": "🚫",
+    ".gitattributes": "🚫",
+    # Rust / Go / other langs
+    ".rs": "🦀",
+    ".go": "🐹",
+    ".java": "☕",
+    ".kt": "☕",
+    ".c": "🔧",
+    ".cpp": "🔧",
+    ".cc": "🔧",
+    ".h": "🔧",
+    ".hpp": "🔧",
+    ".rb": "💎",
+    ".php": "🐘",
+    ".swift": "🍎",
+    ".cs": "🔷",
+    ".lua": "🌙",
+    ".r": "📊",
+    ".jl": "📊",
+}
+
+
+def _file_icon(path: Path) -> str:
+    suffix = path.suffix.lower()
+    name_lower = path.name.lower()
+    return _EXT_ICONS.get(name_lower) or _EXT_ICONS.get(suffix, "📄") + " "
+
 
 _SUFFIX_TO_LANG: dict[str, str] = {
-    ".py": "python", ".js": "javascript", ".ts": "typescript",
-    ".jsx": "javascript", ".tsx": "typescript",
-    ".json": "json", ".md": "markdown", ".css": "css",
-    ".html": "html", ".sh": "bash", ".bash": "bash",
-    ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
-    ".rs": "rust", ".go": "go", ".c": "c", ".cpp": "cpp",
-    ".java": "java", ".sql": "sql", ".xml": "xml",
+    ".py": "python",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".jsx": "javascript",
+    ".tsx": "typescript",
+    ".json": "json",
+    ".md": "markdown",
+    ".css": "css",
+    ".html": "html",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".toml": "toml",
+    ".rs": "rust",
+    ".go": "go",
+    ".c": "c",
+    ".cpp": "cpp",
+    ".java": "java",
+    ".sql": "sql",
+    ".xml": "xml",
 }
 
 
 class ResizeHandle(Widget):
     """拖拉分隔條，調整相鄰 widget 的寬度。"""
 
-    def __init__(self, target_id: str, min_w: int = 10, max_w: int = 80, **kwargs) -> None:
+    def __init__(
+        self, target_id: str, min_w: int = 10, max_w: int = 80, **kwargs
+    ) -> None:
         super().__init__(**kwargs)
         self._target_id = target_id
         self._min_w = min_w
@@ -249,7 +385,7 @@ class TreeContextMenu(ModalScreen):
 
     def on_mount(self) -> None:
         ol = self.query_one(OptionList)
-        x = min(self._sx, self.app.size.width - 24)
+        x = min(self._sx + 6, self.app.size.width - 24)
         y = min(self._sy, self.app.size.height - 6)
         ol.styles.offset = (x, y)
 
@@ -273,7 +409,9 @@ class TreeContextMenu(ModalScreen):
         new_path = self._node_at_screen(event.screen_x, event.screen_y)
         self.dismiss()
         if new_path:
-            self.app.push_screen(TreeContextMenu(new_path, event.screen_x, event.screen_y))
+            self.app.push_screen(
+                TreeContextMenu(new_path, event.screen_x, event.screen_y)
+            )
 
     def _node_at_screen(self, sx: int, sy: int) -> Path | None:
         try:
@@ -317,7 +455,9 @@ class RightClickTree(Tree):
         if isinstance(path, Path):
             self.move_cursor(node)
             event.stop()
-            self.post_message(self.NodeRightClicked(path, event.screen_x, event.screen_y))
+            self.post_message(
+                self.NodeRightClicked(path, event.screen_x, event.screen_y)
+            )
 
 
 class FileTree(Widget):
@@ -341,12 +481,14 @@ class FileTree(Widget):
         self._last_select_time: float = 0.0
 
     def _populate(self, node: "TreeNode[Path]") -> None:
-        path: Path = node.data
+        path: Path | None = node.data
         if not path or not path.is_dir():
             return
         node.remove_children()
         try:
-            entries = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+            entries = sorted(
+                path.iterdir(), key=lambda p: (p.is_file(), p.name.lower())
+            )
         except PermissionError:
             node.add_leaf("🔒 無權限", data=None)
             return
@@ -355,10 +497,9 @@ class FileTree(Widget):
                 continue
             if entry.is_dir():
                 child = node.add(f"📁 {entry.name}", data=entry)
-                child.add_leaf("…", data=None)        # 佔位符讓節點顯示為可展開
+                child.add_leaf("…", data=None)  # 佔位符讓節點顯示為可展開
             else:
-                icon = "🖼 " if entry.suffix.lower() in _IMAGE_EXTS else "📄 "
-                node.add_leaf(f"{icon}{entry.name}", data=entry)
+                node.add_leaf(f"{_file_icon(entry)}{entry.name}", data=entry)
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         node = event.node
@@ -379,7 +520,9 @@ class FileTree(Widget):
             self._last_selected = path
             self._last_select_time = now
 
-    def on_right_click_tree_node_right_clicked(self, event: RightClickTree.NodeRightClicked) -> None:
+    def on_right_click_tree_node_right_clicked(
+        self, event: RightClickTree.NodeRightClicked
+    ) -> None:
         self.app.push_screen(TreeContextMenu(event.path, event.sx, event.sy))
 
     def refresh_tree(self) -> None:
@@ -406,11 +549,15 @@ class ChatAutoComplete(AutoComplete):
             return text
         if text.startswith("!"):
             cmd_part = text[1:]
-            spaces = cmd_part.count(" ")
             tokens = cmd_part.split()
-            last = tokens[-1] if tokens and not text.endswith(" ") else ""
-            path_like = last and ("." in last or "/" in last or last.startswith("~"))
-            if last and not last.startswith("-") and (spaces >= 2 or path_like):
+            if not tokens:
+                return ""
+            cmd0 = tokens[0]
+            last = tokens[-1] if not text.endswith(" ") else ""
+            if not last or last == cmd0:
+                return ""
+            path_like = "." in last or "/" in last or last.startswith("~")
+            if not last.startswith("-") and path_like:
                 return last
         return ""
 
@@ -443,20 +590,42 @@ class ChatAutoComplete(AutoComplete):
             ]
         if text.startswith("!"):
             cmd_part = text[1:]
-            spaces = cmd_part.count(" ")
             tokens = cmd_part.split()
-            last = tokens[-1] if tokens and not text.endswith(" ") else ""
-            path_like = last and ("." in last or "/" in last or last.startswith("~"))
-            if last and not last.startswith("-") and (spaces >= 2 or path_like):
+            if not tokens:
+                return []
+            cmd0 = tokens[0]
+            last = tokens[-1] if not text.endswith(" ") else ""
+            if not last or last == cmd0:
+                return []
+            path_like = "." in last or "/" in last or last.startswith("~")
+            if not last.startswith("-") and path_like:
+                if cmd0 == "cd":
+                    return self._dir_items(last)
                 return self._file_items(last)
         return []
+
+    def _dir_items(self, prefix: str) -> list[DropdownItem]:
+        try:
+            base = Path(prefix) if prefix else Path(".")
+            search_dir = base if base.is_dir() else base.parent
+            name_filter = "" if base.is_dir() else base.name.lower()
+            entries = sorted(search_dir.iterdir(), key=lambda p: p.name.lower())
+            return [
+                DropdownItem(main=str(p) + "/", prefix="📁 ")
+                for p in entries
+                if p.is_dir() and p.name.lower().startswith(name_filter)
+            ][:20]
+        except Exception:
+            return []
 
     def _file_items(self, prefix: str) -> list[DropdownItem]:
         try:
             base = Path(prefix) if prefix else Path(".")
             search_dir = base if base.is_dir() else base.parent
             name_filter = "" if base.is_dir() else base.name.lower()
-            entries = sorted(search_dir.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+            entries = sorted(
+                search_dir.iterdir(), key=lambda p: (p.is_file(), p.name.lower())
+            )
             return [
                 DropdownItem(
                     main=str(p) + ("/" if p.is_dir() else ""),
@@ -473,7 +642,9 @@ class ChatAutoComplete(AutoComplete):
             base = Path(prefix) if prefix else Path(".")
             search_dir = base if base.is_dir() else base.parent
             name_filter = "" if base.is_dir() else base.name.lower()
-            entries = sorted(search_dir.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+            entries = sorted(
+                search_dir.iterdir(), key=lambda p: (p.is_file(), p.name.lower())
+            )
             return [
                 DropdownItem(
                     main=str(p) + ("/" if p.is_dir() else ""),
@@ -499,7 +670,7 @@ class ChatAutoComplete(AutoComplete):
             target.cursor_position = len(value)
         elif text.startswith("!"):
             last_space = text.rfind(" ")
-            base = text[:last_space + 1] if last_space >= 0 else "!"
+            base = text[: last_space + 1] if last_space >= 0 else "!"
             new_val = base + value + ("" if value.endswith("/") else " ")
             target.value = new_val
             target.cursor_position = len(new_val)
@@ -510,6 +681,7 @@ class ChatAutoComplete(AutoComplete):
 
     def _align_to_target(self) -> None:
         from textual.geometry import Offset
+
         x, y = self.target.cursor_screen_offset
         _w, h = self.option_list.outer_size
         # outer_size is 0 before first layout; fall back to option count
@@ -550,11 +722,18 @@ class Sidebar(Widget):
         yield Static("🤖 模型", classes="sidebar-title", markup=True)
         yield Static(MODEL, classes="sidebar-content", id="sb-model", markup=False)
         yield Static("📄 上下文檔案", classes="sidebar-title", markup=True)
-        yield Static("[dim]（無）[/dim]", classes="sidebar-content", id="sb-files", markup=True)
+        yield Static(
+            "[dim]（無）[/dim]", classes="sidebar-content", id="sb-files", markup=True
+        )
         yield Static("📋 Git 變更", classes="sidebar-title", markup=True)
         yield Static("", classes="sidebar-content", id="sb-git", markup=True)
         yield Static("🔧 MCP 工具", classes="sidebar-title", markup=True)
-        yield Static("[dim]初始化中...[/dim]", classes="sidebar-content", id="sb-mcp", markup=True)
+        yield Static(
+            "[dim]初始化中...[/dim]",
+            classes="sidebar-content",
+            id="sb-mcp",
+            markup=True,
+        )
 
     def on_mount(self) -> None:
         self._refresh_git_worker()
@@ -562,10 +741,14 @@ class Sidebar(Widget):
     @work(thread=True)
     def _refresh_git_worker(self) -> None:
         from rich.text import Text as RichText
+
         try:
             out = subprocess.run(
                 ["git", "-c", "color.status=always", "status", "--short"],
-                capture_output=True, text=True, timeout=2, cwd=os.getcwd(),
+                capture_output=True,
+                text=True,
+                timeout=2,
+                cwd=os.getcwd(),
             ).stdout.strip()
             result = RichText.from_ansi(out) if out else RichText("無變更", style="dim")
         except Exception:
@@ -579,12 +762,18 @@ class Sidebar(Widget):
         self.query_one("#sb-model", Static).update(name)
 
     def set_files(self, paths: list[str]) -> None:
-        text = "\n".join(f"[green]✓[/green] {p}" for p in paths) if paths else "[dim]（無）[/dim]"
+        text = (
+            "\n".join(f"[green]✓[/green] {p}" for p in paths)
+            if paths
+            else "[dim]（無）[/dim]"
+        )
         self.query_one("#sb-files", Static).update(text)
 
     def set_mcp(self, summary: dict[str, int]) -> None:
         if summary:
-            lines = [f"[green]{name}[/green] [dim]{n}t[/dim]" for name, n in summary.items()]
+            lines = [
+                f"[green]{name}[/green] [dim]{n}t[/dim]" for name, n in summary.items()
+            ]
             text = "\n".join(lines)
         else:
             text = "[dim]未啟用[/dim]"
@@ -604,6 +793,7 @@ class ImageBubble(Widget):
 
     def compose(self) -> ComposeResult:
         from PIL import Image
+
         name = Path(self._path).name
         try:
             img = Image.open(self._path)
@@ -614,7 +804,8 @@ class ImageBubble(Widget):
             meta = "（無法讀取）"
         yield Static(
             f"[bold]Duncan[/bold]  🖼 {name}  [dim]{meta}[/dim]",
-            markup=True, classes="image-bubble-header",
+            markup=True,
+            classes="image-bubble-header",
         )
         yield Static(self._question, markup=False, classes="image-question")
         yield Button("🔍 開啟圖片", classes="img-open-btn", variant="default")
@@ -627,17 +818,20 @@ class ImageBubble(Widget):
 def _open_image(path: str) -> None:
     """用系統預覽器開啟圖片（WSL → cmd.exe start，Linux → xdg-open，macOS → open）。"""
     import shutil
+
     try:
-        if shutil.which("wslpath"):                         # WSL
-            r = subprocess.run(["wslpath", "-w", path],
-                               capture_output=True, text=True)
+        if shutil.which("wslpath"):  # WSL
+            r = subprocess.run(["wslpath", "-w", path], capture_output=True, text=True)
             win_path = r.stdout.strip() if r.returncode == 0 else path
             # cmd.exe /c start "" "<path>" 用預設程式開啟，空字串是視窗標題佔位
-            subprocess.run(["cmd.exe", "/c", "start", "", win_path],
-                           check=False, capture_output=True)
-        elif shutil.which("xdg-open"):                      # Linux
+            subprocess.run(
+                ["cmd.exe", "/c", "start", "", win_path],
+                check=False,
+                capture_output=True,
+            )
+        elif shutil.which("xdg-open"):  # Linux
             subprocess.run(["xdg-open", path], check=False, capture_output=True)
-        elif shutil.which("open"):                          # macOS
+        elif shutil.which("open"):  # macOS
             subprocess.run(["open", path], check=False, capture_output=True)
     except Exception as e:
         logger.warning(f"開啟圖片失敗：{e}")
@@ -646,10 +840,19 @@ def _open_image(path: str) -> None:
 def _copy_to_clipboard(text: str) -> bool:
     """複製文字到剪貼簿。依序嘗試 xclip → clip.exe（WSL）。"""
     try:
-        subprocess.run(["xclip", "-selection", "clipboard"],
-                       input=text.encode(), check=True, capture_output=True, timeout=3)
+        subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input=text.encode(),
+            check=True,
+            capture_output=True,
+            timeout=3,
+        )
         return True
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
         pass
     try:
         # clip.exe 需要 UTF-16-LE + BOM（\xff\xfe）才會以 Unicode 模式讀取。
@@ -657,11 +860,19 @@ def _copy_to_clipboard(text: str) -> bool:
         # 有 BOM 時 \r\n 在 UTF-16-LE 中是 \x0d\x00\x0a\x00，clip.exe 可正確處理多行。
         win_text = text.replace("\n", "\r\n")
         bom = b"\xff\xfe"
-        subprocess.run(["clip.exe"],
-                       input=bom + win_text.encode("utf-16-le"),
-                       check=True, capture_output=True, timeout=3)
+        subprocess.run(
+            ["clip.exe"],
+            input=bom + win_text.encode("utf-16-le"),
+            check=True,
+            capture_output=True,
+            timeout=3,
+        )
         return True
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
         pass
     return False
 
@@ -674,11 +885,13 @@ class FileViewer(TextArea):
         if not text:
             return
         sel = self.selection
-        start_line = sel.start[0] + 1   # 1-indexed
-        end_line   = sel.end[0] + 1
+        start_line = sel.start[0] + 1  # 1-indexed
+        end_line = sel.end[0] + 1
         # parent is TabPane whose id is the tab_id key in _open_file_tabs
         tab_id = self.parent.id if self.parent else None
-        file_path: Path | None = self.app._open_file_tabs.get(tab_id) if tab_id else None  # type: ignore[attr-defined]
+        file_path: Path | None = (
+            self.app._open_file_tabs.get(tab_id) if tab_id else None
+        )  # type: ignore[attr-defined]
         self.app._last_file_copy = {  # type: ignore[attr-defined]
             "text": text,
             "path": file_path,
@@ -757,6 +970,7 @@ class AIMessage(Widget):
 
     async def _add_copy_buttons(self) -> None:
         from textual.widgets._markdown import MarkdownFence
+
         md = self.query_one(".md-view", Markdown)
         for fence in md.query(MarkdownFence):
             if fence.query(CopyButton):
@@ -779,7 +993,8 @@ class AIMessage(Widget):
             ta.focus()
             self.app.notify(
                 "選取模式：拖曳選取 → Ctrl+C 複製  ·  右鍵返回",
-                severity="information", timeout=3,
+                severity="information",
+                timeout=3,
             )
 
 
@@ -789,12 +1004,14 @@ class ChatCommands(Provider):
         hits = [Hit(1.0, "清除對話", app.action_clear, help="清除所有訊息與對話記錄")]
         for model_name in REGISTRY:
             is_cur = model_name == current
-            hits.append(Hit(
-                1.0 if is_cur else 0.8,
-                f"切換模型  {model_name}{'  ✓' if is_cur else ''}",
-                partial(app.action_switch_model, model_name),
-                help="目前使用中" if is_cur else f"切換到 {model_name}",
-            ))
+            hits.append(
+                Hit(
+                    1.0 if is_cur else 0.8,
+                    f"切換模型  {model_name}{'  ✓' if is_cur else ''}",
+                    partial(app.action_switch_model, model_name),
+                    help="目前使用中" if is_cur else f"切換到 {model_name}",
+                )
+            )
         return hits
 
     async def discover(self) -> Hits:
@@ -805,7 +1022,11 @@ class ChatCommands(Provider):
         app: ChatApp = self.app  # type: ignore
         matcher = self.matcher(query)
         for hit in self._all_hits(app):
-            label = hit.match_display if isinstance(hit.match_display, str) else str(hit.match_display)
+            label = (
+                hit.match_display
+                if isinstance(hit.match_display, str)
+                else str(hit.match_display)
+            )
             score = matcher.match(label)
             if score > 0:
                 yield Hit(score, matcher.highlight(label), hit.command, help=hit.help)
@@ -848,6 +1069,8 @@ class ChatApp(App[None]):
         self._open_file_tabs: dict[str, Path] = {}
         self._file_tab_counter = 0
         self._last_file_copy: dict | None = None  # {text, path, start_line, end_line}
+        self._bash_proc: asyncio.subprocess.Process | None = None
+        self._bash_worker: "Worker | None" = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -864,7 +1087,8 @@ class ChatApp(App[None]):
                             "[dim]Ctrl+B[/dim] 側邊欄  "
                             "[dim]Ctrl+W[/dim] 關閉標籤  "
                             "[dim]右鍵 AI 訊息[/dim] 選取複製",
-                            id="welcome", markup=True,
+                            id="welcome",
+                            markup=True,
                         )
             yield Sidebar(id="sidebar")
         with Horizontal(id="input-row"):
@@ -881,18 +1105,15 @@ class ChatApp(App[None]):
         prompt = self.query_one("#prompt", HistoryInput)
         prompt.focus()
         self._update_prompt_title()
-        self.__class__.SLASH_COMMANDS = (
-            [
-                ("/clear",  "清除對話記錄"),
-                ("/add",    "加入檔案到上下文  /add <路徑>"),
-                ("/del",    "移除上下文檔案  /del <路徑>"),
-                ("/image",  "傳送圖片給模型  /image <路徑> [問題]"),
-                ("/debug",  "切換工具除錯模式（顯示工具參數與回應）"),
-                ("/think",  "切換 Thinking 模式開／關"),
-                ("/cd",     "切換工作目錄  /cd <路徑>"),
-            ]
-            + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
-        )
+        self.__class__.SLASH_COMMANDS = [
+            ("/clear", "清除對話記錄"),
+            ("/add", "加入檔案到上下文  /add <路徑>"),
+            ("/del", "移除上下文檔案  /del <路徑>"),
+            ("/image", "傳送圖片給模型  /image <路徑> [問題]"),
+            ("/debug", "切換工具除錯模式（顯示工具參數與回應）"),
+            ("/think", "切換 Thinking 模式開／關"),
+            ("/cd", "切換工作目錄  /cd <路徑>"),
+        ] + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
         self._sync_cap_bar()
         # 每 15 秒輪詢 Git 狀態
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
@@ -922,9 +1143,11 @@ class ChatApp(App[None]):
             self.agent.mcp_context = await _fetch_db_schema(mcp)
             # 補充 filesystem 可存取路徑到 context
             fs_paths = [
-                arg for name, cfg in servers.items()
+                arg
+                for name, cfg in servers.items()
                 if not name.startswith("_") and cfg.get("command") in ("npx", "node")
-                for arg in cfg.get("args", []) if arg.startswith("/")
+                for arg in cfg.get("args", [])
+                if arg.startswith("/")
             ]
             if fs_paths:
                 self.agent.mcp_context += f"\n檔案系統可存取目錄：{', '.join(fs_paths)}"
@@ -952,6 +1175,8 @@ class ChatApp(App[None]):
         if hist and hist[-1]["role"] == "user":
             hist.pop()
         self.agent.save_history()
+        if self._bash_proc and self._bash_proc.returncode is None:
+            self._bash_proc.kill()
         self.exit()
 
     def on_unmount(self) -> None:
@@ -1027,7 +1252,7 @@ class ChatApp(App[None]):
         if text.startswith("!"):
             cmd = text[1:].strip()
             if cmd:
-                self._run_bash(cmd)
+                self._bash_worker = self._run_bash(cmd)
             return
 
         if text.startswith("/"):
@@ -1067,11 +1292,15 @@ class ChatApp(App[None]):
                 if not arg:
                     self.notify("用法：/image <圖片路徑> [問題]", severity="warning")
                 elif not self.agent.profile.supports_vision:
-                    self.notify(f"{self.agent.profile.name} 不支援圖片輸入", severity="error")
+                    self.notify(
+                        f"{self.agent.profile.name} 不支援圖片輸入", severity="error"
+                    )
                 else:
                     img_parts = arg.split(" ", 1)
                     img_path = img_parts[0].strip()
-                    question = img_parts[1].strip() if len(img_parts) > 1 else "請分析這張圖片"
+                    question = (
+                        img_parts[1].strip() if len(img_parts) > 1 else "請分析這張圖片"
+                    )
                     p = Path(img_path).expanduser().resolve()
                     if not p.exists():
                         self.notify(f"找不到圖片：{img_path}", severity="error")
@@ -1108,7 +1337,9 @@ class ChatApp(App[None]):
         before = len(self._context_files)
         self._context_files = [(fp, fc) for fp, fc in self._context_files if fp != p]
         if len(self._context_files) < before:
-            self.query_one("#sidebar", Sidebar).set_files([fp for fp, _ in self._context_files])
+            self.query_one("#sidebar", Sidebar).set_files(
+                [fp for fp, _ in self._context_files]
+            )
             self.notify(f"已移除：{Path(p).name}", severity="information")
         else:
             self.notify(f"找不到：{path}", severity="warning")
@@ -1118,10 +1349,16 @@ class ChatApp(App[None]):
             p = Path(path).expanduser().resolve()
             content = p.read_text(encoding="utf-8", errors="replace")
             # 避免重複加入同一路徑
-            self._context_files = [(fp, fc) for fp, fc in self._context_files if fp != str(p)]
+            self._context_files = [
+                (fp, fc) for fp, fc in self._context_files if fp != str(p)
+            ]
             self._context_files.append((str(p), content))
-            self.query_one("#sidebar", Sidebar).set_files([fp for fp, _ in self._context_files])
-            self.notify(f"已加入：{p.name}（{len(content)} 字元）", severity="information")
+            self.query_one("#sidebar", Sidebar).set_files(
+                [fp for fp, _ in self._context_files]
+            )
+            self.notify(
+                f"已加入：{p.name}（{len(content)} 字元）", severity="information"
+            )
         except Exception as e:
             self.notify(f"無法讀取 {path}：{e}", severity="error")
 
@@ -1170,7 +1407,7 @@ class ChatApp(App[None]):
         wid = widget.id or "" if widget else ""
         if not wid.startswith("--content-tab-ft-"):
             return
-        tab_id = wid[len("--content-tab-"):]
+        tab_id = wid[len("--content-tab-") :]
         # × is the last char of the label; Tab has padding:0 1 each side
         # so × sits at region.x + region.width - 2
         if event.screen_x >= region.x + region.width - 2:
@@ -1199,13 +1436,20 @@ class ChatApp(App[None]):
         self._file_tab_counter += 1
         tab_id = f"ft-{self._file_tab_counter}"
         try:
-            content = await asyncio.to_thread(path.read_text, encoding="utf-8", errors="replace")
+            content = await asyncio.to_thread(
+                path.read_text, encoding="utf-8", errors="replace"
+            )
         except Exception as e:
             self.notify(f"無法讀取 {path.name}：{e}", severity="error")
             return
         lang = _SUFFIX_TO_LANG.get(path.suffix.lower())
-        ta = FileViewer(content, read_only=True, language=lang,
-                        show_line_numbers=True, soft_wrap=False)
+        ta = FileViewer(
+            content,
+            read_only=True,
+            language=lang,
+            show_line_numbers=True,
+            soft_wrap=False,
+        )
         self._open_file_tabs[tab_id] = path
         await tc.add_pane(TabPane(f"{path.name} ×", ta, id=tab_id))
         tc.active = tab_id
@@ -1275,8 +1519,8 @@ class ChatApp(App[None]):
 
     @work(exclusive=True)
     async def _send(self, text: str, images: list[str] | None = None) -> None:
-        msgs   = self.query_one("#messages", VerticalScroll)
-        prompt = self.query_one("#prompt",   HistoryInput)
+        msgs = self.query_one("#messages", VerticalScroll)
+        prompt = self.query_one("#prompt", HistoryInput)
         stream_msg: AIMessage | None = None
         buf: list[str] = []
 
@@ -1294,6 +1538,7 @@ class ChatApp(App[None]):
         prompt.placeholder = ""
 
         try:
+
             def _at_bottom() -> bool:
                 return msgs.scroll_y >= msgs.max_scroll_y - 3
 
@@ -1303,8 +1548,12 @@ class ChatApp(App[None]):
                 self._spin_label = "思考中"
                 preview = content[:2000] + ("…" if len(content) > 2000 else "")
                 await msgs.mount(
-                    Collapsible(Static(preview, markup=False),
-                                title="💡 思考過程", collapsed=True, classes="thinking")
+                    Collapsible(
+                        Static(preview, markup=False),
+                        title="💡 思考過程",
+                        collapsed=True,
+                        classes="thinking",
+                    )
                 )
                 msgs.scroll_end(animate=False)
 
@@ -1313,7 +1562,13 @@ class ChatApp(App[None]):
                 self._spin_label = "生成中"
                 buf.append(chunk)
                 if stream_msg is None:
-                    await msgs.mount(Static(f"🤖 {self.agent.profile.name}", classes="ai-header", markup=False))
+                    await msgs.mount(
+                        Static(
+                            f"🤖 {self.agent.profile.name}",
+                            classes="ai-header",
+                            markup=False,
+                        )
+                    )
                     stream_msg = AIMessage()
                     await msgs.mount(stream_msg)
                 now = asyncio.get_event_loop().time()
@@ -1328,7 +1583,13 @@ class ChatApp(App[None]):
                     await stream_msg.update_content("".join(buf), final=True)
                 elif not buf:
                     # Model completed with no text output (tool-only turn)
-                    await msgs.mount(Static("🤖 [dim]（已完成，無文字回覆）[/dim]", markup=True, classes="ai-header"))
+                    await msgs.mount(
+                        Static(
+                            "🤖 [dim]（已完成，無文字回覆）[/dim]",
+                            markup=True,
+                            classes="ai-header",
+                        )
+                    )
                 parts: list[str] = []
                 if thinking_s:
                     parts.append(f"思考 {thinking_s:.1f}s")
@@ -1349,9 +1610,20 @@ class ChatApp(App[None]):
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
                 self._spin_label = "工具回應中"
-                _ERR_KEYWORDS = ("error", "Error", "exception", "not found", "Not Found",
-                                 "failed", "Failed", "errno", "traceback", "Traceback",
-                                 "[stderr]", "[exit code")
+                _ERR_KEYWORDS = (
+                    "error",
+                    "Error",
+                    "exception",
+                    "not found",
+                    "Not Found",
+                    "failed",
+                    "Failed",
+                    "errno",
+                    "traceback",
+                    "Traceback",
+                    "[stderr]",
+                    "[exit code",
+                )
                 is_err = any(kw in result for kw in _ERR_KEYWORDS)
                 icon = "❌" if is_err else "🔧"
                 card_class = "tool-debug tool-debug-error" if is_err else "tool-debug"
@@ -1371,7 +1643,9 @@ class ChatApp(App[None]):
                     return
                 args_str = json.dumps(args, ensure_ascii=False, indent=2)
                 cap = 1000
-                result_preview = result[:cap] + (f"\n…（共 {len(result)} 字元）" if len(result) > cap else "")
+                result_preview = result[:cap] + (
+                    f"\n…（共 {len(result)} 字元）" if len(result) > cap else ""
+                )
                 body = f"**參數**\n```json\n{args_str}\n```\n\n**回應**\n```\n{result_preview}\n```"
                 at_bot = _at_bottom()
                 await msgs.mount(
@@ -1425,7 +1699,11 @@ class ChatApp(App[None]):
     async def _run_bash(self, cmd: str) -> None:
         # cd 是 shell built-in，子行程執行不影響 app cwd，改為直接呼叫 os.chdir
         stripped = cmd.strip()
-        if stripped == "cd" or stripped.startswith("cd ") or stripped.startswith("cd\t"):
+        if (
+            stripped == "cd"
+            or stripped.startswith("cd ")
+            or stripped.startswith("cd\t")
+        ):
             arg = stripped[2:].strip() or str(Path.home())
             try:
                 await self._do_cd(arg)
@@ -1433,8 +1711,8 @@ class ChatApp(App[None]):
                 self.notify(f"切換失敗：{e}", severity="error")
             return
 
-        msgs   = self.query_one("#messages", VerticalScroll)
-        prompt = self.query_one("#prompt",   HistoryInput)
+        msgs = self.query_one("#messages", VerticalScroll)
+        prompt = self.query_one("#prompt", HistoryInput)
         await msgs.mount(
             Static(f"[bold]$[/bold] {cmd}", markup=True, classes="user-bubble")
         )
@@ -1457,18 +1735,42 @@ class ChatApp(App[None]):
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=BASH_TIMEOUT)
-            out = stdout.decode(errors="replace").strip()
-            err = stderr.decode(errors="replace").strip()
-            parts = []
-            if out:
-                parts.append(out)
-            if err:
-                parts.append(f"[stderr]\n{err}")
-            raw = "\n".join(parts) or "(no output)"
-            await msgs.mount(Static(Text.from_ansi(raw), classes="bash-output"))
+            self._bash_proc = proc
+            out_widget = Static(Text(""), markup=False, classes="bash-output")
+            await msgs.mount(out_widget)
+            lines: list[str] = []
+
+            def _refresh() -> None:
+                raw = "".join(lines) or "(no output)"
+                try:
+                    out_widget.update(Text.from_ansi(raw))
+                except Exception:
+                    out_widget.update(Text(raw))
+                msgs.scroll_end(animate=False)
+
+            async def _read(stream: asyncio.StreamReader, prefix: str = "") -> None:
+                async for line in stream:
+                    lines.append(prefix + line.decode(errors="replace"))
+                    _refresh()
+
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        _read(proc.stdout),
+                        _read(proc.stderr, "[stderr] "),
+                        proc.wait(),
+                    ),
+                    timeout=BASH_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                lines.append(f"\n⏱ 逾時（>{BASH_TIMEOUT}s）")
+                _refresh()
         except Exception as e:
-            await msgs.mount(Static(f"❌ {e}", markup=False, classes="error-msg"))
+            await msgs.mount(
+                Static(f"❌ {e or type(e).__name__}", markup=False, classes="error-msg")
+            )
         finally:
             msgs.scroll_end(animate=False)
             prompt.disabled = False
@@ -1476,11 +1778,17 @@ class ChatApp(App[None]):
             self._update_prompt_title()
             prompt.placeholder = f"傳訊息給 {self.agent.profile.name}..."
             prompt.focus()
+            self._bash_proc = None
+            self._bash_worker = None
             self.query_one("#sidebar", Sidebar).refresh_git()
             self.query_one("#file-tree", FileTree).refresh_tree()
 
     def action_cancel_stream(self) -> None:
         self.agent._cancelled = True
+        if self._bash_proc and self._bash_proc.returncode is None:
+            self._bash_proc.kill()
+        if self._bash_worker and not self._bash_worker.is_done:
+            self._bash_worker.cancel()
 
 
 if __name__ == "__main__":
