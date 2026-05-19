@@ -759,21 +759,16 @@ class ChatApp(App[None]):
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
                 self._spin_label = "工具回應中"
-                _ERR_KEYWORDS = (
-                    "error",
-                    "Error",
-                    "exception",
-                    "not found",
-                    "Not Found",
-                    "failed",
-                    "Failed",
-                    "errno",
-                    "traceback",
-                    "Traceback",
+                # 只比對工具層自己產生的錯誤前綴，避免檔案內容含 "error" 字串誤判
+                _ERR_PREFIXES = (
+                    "[MCP Error]",
+                    "[Error]",
+                    "[ValidationError]",
                     "[stderr]",
                     "[exit code",
+                    "Traceback (most recent call last)",
                 )
-                is_err = any(kw in result for kw in _ERR_KEYWORDS)
+                is_err = any(kw in result for kw in _ERR_PREFIXES)
                 icon = "❌" if is_err else "🔧"
                 card_class = "tool-debug tool-debug-error" if is_err else "tool-debug"
                 if not self._debug_tools:

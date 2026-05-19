@@ -140,6 +140,7 @@ class MCPClient:
             import json as _json
             args_preview = _json.dumps(arguments, ensure_ascii=False)[:300]
             logger.warning(f"MCP error [{tool_name}](args={args_preview}): {output}")
+            return f"[MCP Error] {output}"
         else:
             logger.debug(f"MCP result [{tool_name}] len={len(output)}")
         return output
