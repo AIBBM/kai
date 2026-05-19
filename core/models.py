@@ -70,6 +70,28 @@ REGISTRY: dict[str, ModelProfile] = {
         supports_tools=True,
         num_ctx=8192,
     ),
+    # ── Gemini (Google API) ──────────────────────────────────────────────────
+    "gemini-2.0-flash": ModelProfile(
+        "gemini-2.0-flash",
+        supports_thinking=False,
+        supports_vision=True,
+        supports_tools=True,
+        backend="gemini",
+    ),
+    "gemini-2.5-flash": ModelProfile(
+        "gemini-2.5-flash",
+        supports_thinking=True,
+        supports_vision=True,
+        supports_tools=True,
+        backend="gemini",
+    ),
+    "gemini-2.5-pro": ModelProfile(
+        "gemini-2.5-pro",
+        supports_thinking=True,
+        supports_vision=True,
+        supports_tools=True,
+        backend="gemini",
+    ),
 }
 
 
