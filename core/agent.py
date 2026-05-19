@@ -78,7 +78,7 @@ class Agent:
 
     def _reset_date(self):
         """把今天日期寫入 history[0]，跨日後呼叫可更新。"""
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        now = datetime.now().strftime("%Y-%m-%d")
         system_msg = {
             "role": "system",
             "content": (
