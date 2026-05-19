@@ -35,13 +35,14 @@
 
 6. **新模型 num_ctx 推算規則（RTX 3050 4 GB VRAM / 32 GB RAM）**：
 
-   先確認模型能否放進 VRAM：
-   - 模型 ≤ 2 GB（完全在 VRAM）：剩餘 VRAM 充足 → `16384`
-   - 模型 2–3 GB（完全在 VRAM）：剩餘 VRAM 1–2 GB → `8192`
-   - 模型 3–4 GB（勉強在 VRAM）：KV cache 幾乎全溢出到 RAM → `16384`（KV 在 RAM，不多付 VRAM 代價）
-   - 模型 > 4 GB（完全 CPU / RAM）：不受 VRAM 限制 → `32768`
+   **原則：KV cache 只要落在 RAM，就直接開大；真正在 VRAM 的才保守設定。**
 
-   **原則**：KV cache 只要落在 RAM，就直接開大；真正在 VRAM 的才保守設定。
+   - 模型 ≤ 2 GB（VRAM 充足）：KV 也在 VRAM → `16384`
+   - 模型 2–4 GB（VRAM 近滿）：KV 16384 會溢出到 RAM，32GB RAM spill 無代價 → `16384`
+   - 模型 > 4 GB（全 CPU / RAM）：不受 VRAM 限制 → `32768`
+
+   **例外**：
+   - `qwen2.5-coder:3b`：`supports_tools=False`，context 需求低，維持 `8192`
 
 7. 更新 `core/models.py`：保留 Gemini section，ollama 區塊依安裝清單重寫
 

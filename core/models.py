@@ -11,15 +11,15 @@ class ModelProfile:
     backend: str = "ollama"  # "ollama" | "gemini"
 
 
-# 已安裝模型（RTX 3050 4 GB）
-# num_ctx 原則：模型大小 + KV cache 盡量不超過 4 GB VRAM
-#   deepseek-r1:1.5b  1.1GB → ~2.8GB 空間  → 16384（thinking 需要長 context）
-#   qwen2.5-coder:3b  1.9GB → ~2.0GB 空間  → 8192
-#   qwen3.5:2b        2.7GB Q8_0 → ~1.2GB  → 8192（部分 KV 可 spill 到 RAM）
-#   qwen3-vl:4b       3.3GB → ~0.6GB 空間  → 8192（vision token 多，需要足夠空間）
-#   qwen3.5:4b        3.4GB → ~0.5GB 空間  → 8192（同上，部分 spill）
-#   gemma4:e2b        7.2GB → GPU 放不下    → 8192（CPU offload，速度慢）
-#   gemma4:e4b        9.6GB → GPU 放不下    → 8192（全 CPU，速度慢）
+# 已安裝模型（RTX 3050 4 GB VRAM / 32 GB RAM）
+# num_ctx 原則：KV cache 只要落在 RAM，就直接開大；真正在 VRAM 的才保守設定
+#   deepseek-r1:1.5b  1.1GB → VRAM 充足             → 16384
+#   qwen2.5-coder:3b  1.9GB → VRAM 充足             → 8192（tools=False，context 需求低）
+#   qwen3.5:2b        2.7GB → KV 16384 會 spill RAM → 16384（32GB RAM，spill 無代價）
+#   qwen3-vl:4b       3.3GB → KV 幾乎全 RAM         → 16384
+#   qwen3.5:4b        3.4GB → KV 幾乎全 RAM         → 16384
+#   gemma4:e2b        7.2GB → 全 CPU / RAM           → 32768
+#   gemma4:e4b        9.6GB → 全 CPU / RAM           → 32768
 REGISTRY: dict[str, ModelProfile] = {
     "deepseek-r1:1.5b": ModelProfile(
         "deepseek-r1:1.5b",
@@ -40,7 +40,7 @@ REGISTRY: dict[str, ModelProfile] = {
         supports_thinking=False,  # 2B 推理能力有限，thinking 只增加延遲
         supports_vision=True,
         supports_tools=True,
-        num_ctx=8192,
+        num_ctx=16384,
     ),
     "qwen3-vl:4b": ModelProfile(
         "qwen3-vl:4b",
