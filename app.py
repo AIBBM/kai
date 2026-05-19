@@ -442,17 +442,55 @@ class ChatApp(App[None]):
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
+    _AT_SKIP_DIRS = frozenset({
+        ".git", ".venv", "venv", "env", "__pycache__",
+        ".mypy_cache", ".ruff_cache", ".pytest_cache",
+        "dist", "build", ".next", ".nuxt",
+        "node_modules", ".idea", ".vscode",
+    })
+    _AT_SKIP_SUFFIXES = frozenset({
+        ".pyc", ".pyo", ".so", ".dll", ".exe",
+        ".o", ".a", ".lib", ".obj",
+    })
+
+    def _dir_tree(self, root: Path, prefix: str = "", depth: int = 0) -> list[str]:
+        if depth > 4:
+            return [prefix + "…"]
+        lines: list[str] = []
+        try:
+            entries = sorted(root.iterdir(), key=lambda e: (e.is_file(), e.name.lower()))
+        except PermissionError:
+            return [prefix + "(permission denied)"]
+        for entry in entries:
+            if entry.name.startswith(".") and entry.name not in {".env", ".env.local"}:
+                continue
+            if entry.name in self._AT_SKIP_DIRS:
+                continue
+            if entry.is_file() and entry.suffix.lower() in self._AT_SKIP_SUFFIXES:
+                continue
+            connector = "├── " if entry != entries[-1] else "└── "
+            lines.append(prefix + connector + entry.name + ("/" if entry.is_dir() else ""))
+            if entry.is_dir():
+                ext = "│   " if entry != entries[-1] else "    "
+                lines.extend(self._dir_tree(entry, prefix + ext, depth + 1))
+        return lines
+
     def _parse_at_files(self, text: str) -> list[tuple[str, str]]:
-        """解析訊息中的 @path，回傳 [(resolved_path, content)]，重複路徑只讀一次。"""
+        """解析訊息中的 @path：檔案注入內容，目錄注入 tree 結構。"""
         files: list[tuple[str, str]] = []
         seen: set[str] = set()
         for m in self._at_mention_re.finditer(text):
             raw = m.group(1)
             try:
                 p = Path(raw).expanduser().resolve()
-                if p.is_file() and str(p) not in seen:
-                    seen.add(str(p))
+                if str(p) in seen:
+                    continue
+                seen.add(str(p))
+                if p.is_file():
                     files.append((str(p), p.read_text(encoding="utf-8", errors="replace")))
+                elif p.is_dir():
+                    tree_lines = [p.name + "/"] + self._dir_tree(p)
+                    files.append((str(p), "[目錄結構]\n" + "\n".join(tree_lines)))
             except Exception:
                 pass
         return files
