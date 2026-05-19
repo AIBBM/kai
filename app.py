@@ -758,7 +758,13 @@ class ChatApp(App[None]):
                     msgs.scroll_end(animate=False)
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
+                nonlocal stream_msg, buf
                 self._spin_label = "工具回應中"
+                # 工具卡出現前先把目前的回覆定稿，讓下一輪在工具卡之後建新的 AIMessage
+                if stream_msg and buf:
+                    await stream_msg.update_content("".join(buf), final=True)
+                stream_msg = None
+                buf.clear()
                 # 只比對工具層自己產生的錯誤前綴，避免檔案內容含 "error" 字串誤判
                 _ERR_PREFIXES = (
                     "[MCP Error]",
