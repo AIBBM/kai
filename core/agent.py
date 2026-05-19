@@ -36,8 +36,10 @@ from .tools import (
     SEARCH_TOOL,
     bash_exec,
     clean_thinking,
+    fetch_url,
     run_tool,
     web_search,
+    FETCH_TOOL,
 )
 
 try:
@@ -54,6 +56,7 @@ class Agent:
         # 工具對映表：新工具只需在這裡登記
         self.tools_map: dict = {
             "web_search": web_search,
+            "fetch_url": fetch_url,
             "bash_exec": bash_exec,
         }
         if NUM_CTX:
@@ -447,7 +450,7 @@ class Agent:
         # 根據模型特性决定要傳哪些工具
         active_tools = []
         if self.profile.supports_tools and self.tools_map:
-            active_tools.extend([SEARCH_TOOL, BASH_TOOL])
+            active_tools.extend([SEARCH_TOOL, FETCH_TOOL, BASH_TOOL])
         if self.profile.supports_tools and self.mcp_client:
             active_tools.extend(self.mcp_client.tools)
 

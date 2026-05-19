@@ -12,7 +12,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from .config import BASH_TIMEOUT, MAX_SEARCH_CHARS, SEARCH_NUM_RESULTS, SEARCH_RETRIES, SEARCH_TIMEOUT, SEARXNG_URL
+from .config import BASH_TIMEOUT, FETCH_MAX_CHARS, JINA_API_KEY, MAX_SEARCH_CHARS, SEARCH_NUM_RESULTS, SEARCH_RETRIES, SEARCH_TIMEOUT, SEARXNG_URL
 
 BASH_TOOL = {
     "type": "function",
@@ -39,6 +39,22 @@ SEARCH_TOOL = {
             "type": "object",
             "properties": {"query": {"type": "string", "description": "Search query"}},
             "required": ["query"],
+        },
+    },
+}
+
+FETCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "fetch_url",
+        "description": (
+            "Fetch the full content of a web page as clean Markdown using Jina Reader. "
+            "Use after web_search to read articles, docs, or pages in detail."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "description": "Full URL to fetch"}},
+            "required": ["url"],
         },
     },
 }
@@ -141,6 +157,26 @@ async def web_search(query: str, num_results: int = SEARCH_NUM_RESULTS) -> str:
     result = "\n\n".join(text for _, text in budgeted)
     logger.debug(f"傳給模型的內容（{len(result)} 字元）:\n{result}")
     return result
+
+
+async def fetch_url(url: str) -> str:
+    """用 Jina Reader 抓取網頁完整內容，回傳 Markdown 格式文字。"""
+    jina_url = f"https://r.jina.ai/{url}"
+    headers = {"Accept": "text/plain", "X-Return-Format": "markdown"}
+    if JINA_API_KEY:
+        headers["Authorization"] = f"Bearer {JINA_API_KEY}"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(jina_url, headers=headers, follow_redirects=True)
+            resp.raise_for_status()
+            content = resp.text.strip()
+        if len(content) > FETCH_MAX_CHARS:
+            content = content[:FETCH_MAX_CHARS] + f"\n…（共 {len(content)} 字元，已截斷）"
+        logger.debug(f"fetch_url {url} → {len(content)} 字元")
+        return content
+    except Exception as e:
+        logger.warning(f"fetch_url 失敗：{url}：{e}")
+        return f"[Error] fetch_url 失敗：{e}"
 
 
 async def bash_exec(command: str, timeout: int = 0) -> str:
