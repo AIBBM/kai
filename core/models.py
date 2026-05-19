@@ -47,14 +47,14 @@ REGISTRY: dict[str, ModelProfile] = {
         supports_thinking=True,
         supports_vision=True,
         supports_tools=True,
-        num_ctx=8192,
+        num_ctx=16384,  # KV 本來就溢出到 RAM，開大不多付代價
     ),
     "qwen3.5:4b": ModelProfile(
         "qwen3.5:4b",
         supports_thinking=True,
         supports_vision=True,
         supports_tools=True,
-        num_ctx=8192,
+        num_ctx=16384,  # 同上
     ),
     "gemma4:e2b": ModelProfile(
         "gemma4:e2b",

@@ -33,10 +33,15 @@
    - 在 REGISTRY（非 Gemini）但未安裝 → 移除
    - 已在 REGISTRY 的模型 → **重新驗證 supports_tools / supports_thinking**（template 是事實來源），num_ctx 保留不動
 
-6. **新模型 num_ctx 推算規則（RTX 3050 4 GB）**：
-   - 模型 < 2 GB：16384
-   - 模型 2–4 GB：8192（部分 KV 可 spill 到 RAM）
-   - 模型 > 4 GB（GPU 放不下）：8192
+6. **新模型 num_ctx 推算規則（RTX 3050 4 GB VRAM / 32 GB RAM）**：
+
+   先確認模型能否放進 VRAM：
+   - 模型 ≤ 2 GB（完全在 VRAM）：剩餘 VRAM 充足 → `16384`
+   - 模型 2–3 GB（完全在 VRAM）：剩餘 VRAM 1–2 GB → `8192`
+   - 模型 3–4 GB（勉強在 VRAM）：KV cache 幾乎全溢出到 RAM → `16384`（KV 在 RAM，不多付 VRAM 代價）
+   - 模型 > 4 GB（完全 CPU / RAM）：不受 VRAM 限制 → `32768`
+
+   **原則**：KV cache 只要落在 RAM，就直接開大；真正在 VRAM 的才保守設定。
 
 7. 更新 `core/models.py`：保留 Gemini section，ollama 區塊依安裝清單重寫
 
