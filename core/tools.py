@@ -160,20 +160,23 @@ async def web_search(query: str, num_results: int = SEARCH_NUM_RESULTS) -> str:
 
 
 async def fetch_url(url: str) -> str:
-    """用 Jina Reader 抓取網頁完整內容，回傳 Markdown 格式文字。"""
+    """用 Jina Reader 抓取網頁完整內容，回傳結構化 Markdown。"""
     jina_url = f"https://r.jina.ai/{url}"
-    headers = {"Accept": "text/plain", "X-Return-Format": "markdown"}
+    headers = {"Accept": "application/json"}
     if JINA_API_KEY:
         headers["Authorization"] = f"Bearer {JINA_API_KEY}"
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.get(jina_url, headers=headers, follow_redirects=True)
             resp.raise_for_status()
-            content = resp.text.strip()
+            data = resp.json().get("data", {})
+        title = data.get("title", "")
+        page_url = data.get("url", url)
+        content = data.get("content", "").strip()
         if len(content) > FETCH_MAX_CHARS:
             content = content[:FETCH_MAX_CHARS] + f"\n…（共 {len(content)} 字元，已截斷）"
         logger.debug(f"fetch_url {url} → {len(content)} 字元")
-        return content
+        return f"# {title}\nURL: {page_url}\n\n{content}"
     except Exception as e:
         logger.warning(f"fetch_url 失敗：{url}：{e}")
         return f"[Error] fetch_url 失敗：{e}"
