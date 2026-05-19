@@ -18,7 +18,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 
-from config import (
+from .config import (
     GEMINI_API_KEY,
     HISTORY_FILE,
     HISTORY_KEEP,
@@ -30,8 +30,8 @@ from config import (
     TOP_P,
     USERNAME,
 )
-from models import ModelProfile, get_profile
-from tools import (
+from .models import ModelProfile, get_profile
+from .tools import (
     BASH_TOOL,
     SEARCH_TOOL,
     bash_exec,
@@ -41,7 +41,7 @@ from tools import (
 )
 
 try:
-    from mcp_client import MCPClient
+    from .mcp_client import MCPClient
 except ImportError:
     MCPClient = None  # type: ignore
 

@@ -4,10 +4,16 @@ import sys
 import termios
 import tty
 
+from loguru import logger
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
 from rich.panel import Panel
+
+from core.agent import Agent
+from core.config import HISTORY_FILE, MODEL, SEARXNG_URL, USERNAME
+from core.file_picker import pick_image
+from core.mcp_client import MCPClient, load_mcp_servers
 
 SLASH_COMMANDS = {
     "/clear": "清空畫面（保留對話記憶）",
@@ -26,13 +32,6 @@ class SlashCompleter(Completer):
                         display=cmd,
                         display_meta=desc,
                     )
-
-
-from agent import Agent
-from config import HISTORY_FILE, MODEL, SEARXNG_URL, USERNAME
-from loguru import logger
-from file_picker import pick_image
-from mcp_client import MCPClient, load_mcp_servers
 
 
 async def _fetch_db_schema(mcp: MCPClient) -> str:

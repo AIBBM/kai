@@ -12,7 +12,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from config import BASH_TIMEOUT, MAX_SEARCH_CHARS, SEARCH_NUM_RESULTS, SEARCH_RETRIES, SEARCH_TIMEOUT, SEARXNG_URL
+from .config import BASH_TIMEOUT, MAX_SEARCH_CHARS, SEARCH_NUM_RESULTS, SEARCH_RETRIES, SEARCH_TIMEOUT, SEARXNG_URL
 
 BASH_TOOL = {
     "type": "function",
