@@ -1,10 +1,74 @@
 """Shared constants and utility functions for the TUI."""
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
 from loguru import logger
+
+# LaTeX inline math → Unicode 對照表
+_LATEX_MAP: dict[str, str] = {
+    # 箭頭
+    "rightarrow": "→", "leftarrow": "←", "to": "→",
+    "Rightarrow": "⇒", "Leftarrow": "⇐",
+    "leftrightarrow": "↔", "Leftrightarrow": "⇔",
+    "uparrow": "↑", "downarrow": "↓",
+    "nearrow": "↗", "searrow": "↘", "nwarrow": "↖", "swarrow": "↙",
+    "implies": "⟹", "iff": "⟺",
+    # 比較 / 運算
+    "leq": "≤", "geq": "≥", "neq": "≠", "approx": "≈",
+    "equiv": "≡", "sim": "∼", "simeq": "≃", "cong": "≅",
+    "ll": "≪", "gg": "≫", "propto": "∝",
+    "times": "×", "div": "÷", "pm": "±", "mp": "∓",
+    "cdot": "·", "circ": "∘", "oplus": "⊕", "otimes": "⊗",
+    # 集合 / 邏輯
+    "in": "∈", "notin": "∉", "ni": "∋",
+    "subset": "⊂", "subseteq": "⊆", "supset": "⊃", "supseteq": "⊇",
+    "cup": "∪", "cap": "∩", "setminus": "∖", "emptyset": "∅",
+    "forall": "∀", "exists": "∃", "nexists": "∄",
+    "neg": "¬", "land": "∧", "lor": "∨",
+    # 數學符號
+    "infty": "∞", "partial": "∂", "nabla": "∇",
+    "sum": "∑", "prod": "∏", "int": "∫", "oint": "∮",
+    "sqrt": "√", "ldots": "…", "cdots": "⋯", "vdots": "⋮", "ddots": "⋱",
+    "therefore": "∴", "because": "∵",
+    # 希臘小寫
+    "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ",
+    "epsilon": "ε", "varepsilon": "ε", "zeta": "ζ", "eta": "η",
+    "theta": "θ", "vartheta": "ϑ", "iota": "ι", "kappa": "κ",
+    "lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ",
+    "pi": "π", "varpi": "ϖ", "rho": "ρ", "sigma": "σ",
+    "tau": "τ", "upsilon": "υ", "phi": "φ", "varphi": "φ",
+    "chi": "χ", "psi": "ψ", "omega": "ω",
+    # 希臘大寫
+    "Gamma": "Γ", "Delta": "Δ", "Theta": "Θ", "Lambda": "Λ",
+    "Xi": "Ξ", "Pi": "Π", "Sigma": "Σ", "Upsilon": "Υ",
+    "Phi": "Φ", "Psi": "Ψ", "Omega": "Ω",
+}
+
+# 比對 $...$ 但跳過 code fence / inline code
+_CODE_FENCE = re.compile(r"```[\s\S]*?```|`[^`]+`")
+_INLINE_MATH = re.compile(r"\$\\?([A-Za-z]+)\$")
+
+
+def _latex_to_unicode(text: str) -> str:
+    r"""把 AI 輸出裡的 LaTeX inline math（$\cmd$）轉成 Unicode，跳過 code block。"""
+    # 先把 code block/span 位置記下來，避免在 code 裡替換
+    protected: list[tuple[int, int]] = []
+    for m in _CODE_FENCE.finditer(text):
+        protected.append((m.start(), m.end()))
+
+    def _in_code(pos: int) -> bool:
+        return any(s <= pos < e for s, e in protected)
+
+    def _replace(m: re.Match) -> str:
+        if _in_code(m.start()):
+            return m.group(0)
+        cmd = m.group(1)
+        return _LATEX_MAP.get(cmd, m.group(0))
+
+    return _INLINE_MATH.sub(_replace, text)
 
 _IMAGE_EXTS = frozenset(
     {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"}

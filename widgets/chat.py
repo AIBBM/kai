@@ -13,7 +13,7 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, Markdown, Static, Tab, TextArea
 
-from .utils import _copy_to_clipboard, _line_height, _open_image
+from .utils import _copy_to_clipboard, _latex_to_unicode, _line_height, _open_image
 
 
 class ConfirmCloseScreen(ModalScreen[bool]):
@@ -203,7 +203,7 @@ class AIMessage(Widget):
 
     async def update_content(self, text: str, final: bool = False) -> None:
         self._raw = text
-        await self.query_one(".md-view", Markdown).update(text)
+        await self.query_one(".md-view", Markdown).update(_latex_to_unicode(text))
         if final:
             ta = self.query_one(".ta-view", TextArea)
             ta.text = text
