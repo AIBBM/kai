@@ -11,20 +11,19 @@
    - context length（max ctx）
    - quantization
 
-3. 執行 `ollama show <model> --modelfile` 檢查 TEMPLATE，判斷實際能力：
+3. 執行以下指令取得每個模型的實際能力（最準確的來源）：
+   ```
+   curl -s http://localhost:11434/api/show -d '{"name":"<model>"}' | jq '.capabilities'
+   ```
+   回傳範例：`["completion", "vision", "tools", "thinking"]`
 
-   **supports_tools 判斷（template 優先，名稱為輔）**：
-   - template 含 `.Tools` 且有 `<tool_call>` 或 `tool_call` 格式 → `True`
-   - template 不含 `.Tools` → `False`
-   - 無法判斷時：名稱含 `coder` 的舊版模型預設 `False`，其餘 `True`
+   **依 capabilities 欄位對應**：
+   - 含 `tools`     → `supports_tools=True`，否則 `False`
+   - 含 `thinking`  → `supports_thinking=True`，否則 `False`
+   - 含 `vision`    → `supports_vision=True`，否則 `False`
 
-   **supports_thinking 判斷（template 優先，名稱為輔）**：
-   - template 含 `.Thinking` 或 `<think>` 或 `thinking` 關鍵字 → `True`
-   - 名稱含 `r1`、`qwq`、`qwen3`（非 qwen3.5:2b）、`gemma4`、`gemini-2.5` → `True`
-   - qwen3.5:2b 例外：即使 template 支援，`supports_thinking=False`（2B 推理能力不足）
-
-   **supports_vision 判斷（名稱為主）**：
-   - 名稱含 `vl`、`vision`、`llava`、`gemma`、`qwen3.5` → `True`
+   **例外（覆蓋 capabilities 的刻意設定，不要修改）**：
+   - `qwen3.5:2b`：`supports_thinking=False`（Ollama 雖回報 thinking，但 2B 推理品質差，開啟只增加延遲）
 
 4. 讀取 `core/models.py` 目前的 REGISTRY
 
