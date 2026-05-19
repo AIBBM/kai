@@ -61,14 +61,14 @@ REGISTRY: dict[str, ModelProfile] = {
         supports_thinking=True,
         supports_vision=True,
         supports_tools=True,
-        num_ctx=8192,
+        num_ctx=32768,  # 7.2GB CPU only，KV cache 吃 RAM，不受 VRAM 限制
     ),
     "gemma4:e4b": ModelProfile(
         "gemma4:e4b",
         supports_thinking=True,
         supports_vision=True,
         supports_tools=True,
-        num_ctx=8192,
+        num_ctx=32768,  # 9.6GB CPU only，同上
     ),
     # ── Gemini (Google API) ──────────────────────────────────────────────────
     "gemini-2.0-flash": ModelProfile(
