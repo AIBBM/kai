@@ -540,9 +540,9 @@ class ChatApp(App[None]):
                 fname = viewer._file_path.name if viewer._file_path else "檔案"
                 confirmed = await self.push_screen_wait(ConfirmCloseScreen(fname))
                 if not confirmed:
-                    return
+                    return  # 使用者取消 → tab 保持開啟
         except Exception:
-            pass
+            pass  # 找不到 FileViewer → 直接關閉（非編輯 tab）
         self._open_file_tabs.pop(tab_id, None)
         tc = self.query_one("#center-tabs", TabbedContent)
         await tc.remove_pane(tab_id)
