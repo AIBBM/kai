@@ -18,7 +18,11 @@ BASH_TOOL = {
     "type": "function",
     "function": {
         "name": "bash_exec",
-        "description": "Execute a bash command and return stdout/stderr. Use for file ops, system info, running scripts. Prefer a single command with built-in repetition (e.g. ping -c 3) over multiple tool calls.",
+        "description": (
+            "Execute a bash command and return stdout/stderr. "
+            "Use for file operations, running scripts, installing packages, checking system state. "
+            "Prefer chaining commands with && over multiple tool calls."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -29,32 +33,18 @@ BASH_TOOL = {
     },
 }
 
-# Ollama tool calling 格式定義
 SEARCH_TOOL = {
     "type": "function",
     "function": {
         "name": "web_search",
-        "description": "Search the web for up-to-date information.",
+        "description": (
+            "Search the web and return titles, URLs, and short snippets. "
+            "Results are summaries only — use fetch_urls to read the full content of specific pages."
+        ),
         "parameters": {
             "type": "object",
             "properties": {"query": {"type": "string", "description": "Search query"}},
             "required": ["query"],
-        },
-    },
-}
-
-FETCH_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "fetch_url",
-        "description": (
-            "Fetch the full content of a web page as clean Markdown using Jina Reader. "
-            "Use after web_search to read articles, docs, or pages in detail."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {"url": {"type": "string", "description": "Full URL to fetch"}},
-            "required": ["url"],
         },
     },
 }
@@ -64,8 +54,9 @@ FETCH_URLS_TOOL = {
     "function": {
         "name": "fetch_urls",
         "description": (
-            "Fetch multiple web pages concurrently (up to 5). "
-            "Use this instead of calling fetch_url repeatedly when you need to read several URLs at once."
+            "Fetch the full Markdown content of 1–5 web pages concurrently via Jina Reader. "
+            "Use after web_search when snippets are not enough and you need the complete article or documentation. "
+            "Pass a single-element list for one URL."
         ),
         "parameters": {
             "type": "object",
@@ -73,7 +64,7 @@ FETCH_URLS_TOOL = {
                 "urls": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of URLs to fetch (max 5)",
+                    "description": "List of full URLs to fetch (max 5)",
                 }
             },
             "required": ["urls"],
