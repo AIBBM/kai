@@ -186,7 +186,8 @@ class ChatApp(App[None]):
         self.query_one("#prompt", HistoryInput).focus()
         self._update_prompt_title()
         self.__class__.SLASH_COMMANDS = [
-            ("/clear", "清除對話記錄"),
+            ("/clear", "清除畫面"),
+            ("/cls", "清除記憶（畫面 + 對話歷史）"),
             ("/add", "加入檔案到上下文  /add <路徑>"),
             ("/del", "移除上下文檔案  /del <路徑>"),
             ("/image", "傳送圖片給模型  /image <路徑> [問題]"),
@@ -335,6 +336,8 @@ class ChatApp(App[None]):
             cmd = parts[0].lower()
             arg = parts[1].strip() if len(parts) > 1 else ""
             if cmd == "/clear":
+                await self.action_clear_screen()
+            elif cmd == "/cls":
                 await self.action_clear()
             elif cmd == "/model" and arg:
                 await self.action_switch_model(arg)
