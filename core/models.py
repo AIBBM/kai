@@ -32,7 +32,7 @@ REGISTRY: dict[str, ModelProfile] = {
         "qwen2.5-coder:3b",
         supports_thinking=False,
         supports_vision=False,
-        supports_tools=False,  # Ollama template 不含 function calling
+        supports_tools=True,
         num_ctx=8192,
     ),
     "qwen3.5:2b": ModelProfile(
