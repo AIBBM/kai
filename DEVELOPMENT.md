@@ -9,12 +9,12 @@
 三層，優先度由高到低：
 
 ```
-.env          ← 使用者 override（實際生效）
-config.py     ← 應用程式預設值（.env 未設定時生效）
-models.py     ← 各模型的 num_ctx（NUM_CTX=0 時生效）
+.env              ← 使用者 override（實際生效）
+core/config.py    ← 應用程式預設值（.env 未設定時生效）
+core/models.py    ← 各模型的 num_ctx（NUM_CTX=0 時生效）
 ```
 
-**規則：只在 `.env` 放真正需要 override 的東西。** 改預設值改 `config.py`；改特定模型的 context window 改 `models.py`。
+**規則：只在 `.env` 放真正需要 override 的東西。** 改預設值改 `core/config.py`；改特定模型的 context window 改 `core/models.py`。
 
 ### `.env` 應該有什麼
 
@@ -26,20 +26,20 @@ models.py     ← 各模型的 num_ctx（NUM_CTX=0 時生效）
 | `CONTEXT7_API_KEY` | Context7 API 金鑰 |
 | `NUM_CTX=8192` | 只在需要限制 VRAM 時才取消註解；否則用各模型預設值 |
 
-所有其他調校參數（`MAX_TOOL_CALLS`、`MAX_SEARCH_CHARS` 等）**不應出現在 `.env`**，由 `config.py` 預設值控制。
+所有其他調校參數（`MAX_TOOL_CALLS`、`MAX_SEARCH_CHARS` 等）**不應出現在 `.env`**，由 `core/config.py` 預設值控制。
 
 ### `NUM_CTX` 的語意
 
-- `.env` 未設定（或 `NUM_CTX=0`）→ 每個模型用 `models.py` REGISTRY 裡各自的 `num_ctx`
+- `.env` 未設定（或 `NUM_CTX=0`）→ 每個模型用 `core/models.py` REGISTRY 裡各自的 `num_ctx`
 - `.env` 設定 `NUM_CTX=N` → **覆蓋所有模型**，全部用 N
 
-覆蓋行為在 `agent.py:Agent.__init__`：
+覆蓋行為在 `core/agent.py:Agent.__init__`：
 ```python
 if NUM_CTX:
     self.profile.num_ctx = NUM_CTX
 ```
 
-### `config.py` 預設值（2025-05 版）
+### `core/config.py` 預設值（2025-05 版）
 
 | 常數 | 預設 | 說明 |
 |------|------|------|
@@ -50,7 +50,7 @@ if NUM_CTX:
 
 ---
 
-## 模型設定（models.py）
+## 模型設定（`core/models.py`）
 
 各模型的 `num_ctx` 對應 Playwright agentic 任務的需求：
 
@@ -176,7 +176,7 @@ system prompt → 工具名稱清單 + 優先順序規則（語境）
 Ollama tools  → 每個工具的 description + parameters schema（呼叫方式）
 ```
 
-Schema 來源：MCP server 在 `list_tools()` 時回傳，`mcp_client.py` 轉換為 Ollama 格式後加入 `active_tools`。
+Schema 來源：MCP server 在 `list_tools()` 時回傳，`core/mcp_client.py` 轉換為 Ollama 格式後加入 `active_tools`。
 
 ### Ollama tools 機制（我們不需要自己處理的部分）
 
@@ -211,9 +211,30 @@ msg.tool_calls = [
 
 ---
 
-## TUI 架構（app.py）
+## TUI 架構（`app.py` + `widgets/`）
 
-CLI 版（`main.py`）之外，`app.py` 是 Textual TUI。
+CLI 版（`main.py`）之外，`app.py` 是 Textual TUI 的入口點。TUI 元件拆分到 `widgets/` 套件：
+
+```
+app.py          ChatApp（主 App，事件處理，slash commands，_send，_run_bash）
+widgets/
+  input.py      HistoryInput（Up/Down 歷史、Ctrl+Z undo、多行貼上）
+                ChatAutoComplete（斜線指令、路徑補全）
+  tree.py       FileTree（懶載入目錄樹，雙擊開啟）
+                RightClickTree（攔截右鍵事件）
+                TreeContextMenu（右鍵選單 ModalScreen）
+  sidebar.py    Sidebar（cwd、模型、上下文檔案、git、MCP 工具）
+                ResizeHandle（拖拉分隔條）
+  chat.py       AIMessage（Markdown 渲染 + 右鍵選取模式）
+                FileViewer（唯讀 TextArea，Ctrl+C WSL 多行複製）
+                ImageBubble（圖片訊息卡片）
+                CopyButton（程式碼區塊複製按鈕）
+                CapabilityBadge / CapLabel（Think / vision 標籤）
+  commands.py   ChatCommands（Ctrl+P 命令面板）
+  utils.py      _copy_to_clipboard（xclip / clip.exe）
+                _file_icon（extension → emoji）
+                _line_height、_open_image 等 TUI 共用工具
+```
 
 ### MCP 生命週期
 
@@ -268,7 +289,7 @@ def on_input_changed(self, event):
 
 ### 工具呼叫錯誤顯示
 
-`agent.py` 裡有兩種靜默失敗要注意：
+`core/agent.py` 裡有兩種靜默失敗要注意：
 
 1. **`ollama.ResponseError`**（context 溢出等）：原本只 `console.print()`（CLI 可見，TUI 不可見），現在加了 `logger.error()` + TUI 模式 re-raise
 2. **`MAX_TOOL_CALLS` 超限**：同樣問題，現在加了 `logger.warning()` + TUI 模式 `raise RuntimeError`

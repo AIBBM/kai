@@ -12,7 +12,7 @@ uv run python app.py
 uv run python main.py
 
 # Test web search directly
-uv run python tools.py "搜尋關鍵字" 3
+uv run python core/tools.py "搜尋關鍵字" 3
 
 # Lint
 uv run ruff check .
@@ -29,14 +29,22 @@ No test suite exists. Functional testing is done by running the app directly.
 Two entry points sharing the same core:
 
 ```
-app.py           → Textual TUI (primary); chat UI, file tree, tabs, sidebar
-main.py          → legacy Rich/prompt_toolkit CLI (still functional)
-agent.py         → Agent class: history, streaming, tool-call loop
-tools.py         → web_search (SearXNG), run_tool dispatcher
-models.py        → ModelProfile dataclass + REGISTRY
-config.py        → all env-var constants (loaded once at import)
-mcp_client.py    → MCP server lifecycle + tool dispatch
-file_picker.py   → prompt_toolkit file browser (used by main.py /image)
+app.py              → Textual TUI (primary); chat UI, file tree, tabs, sidebar
+main.py             → legacy Rich/prompt_toolkit CLI (still functional)
+core/
+  agent.py          → Agent class: history, streaming, tool-call loop
+  tools.py          → web_search (SearXNG), run_tool dispatcher
+  models.py         → ModelProfile dataclass + REGISTRY
+  config.py         → all env-var constants (loaded once at import)
+  mcp_client.py     → MCP server lifecycle + tool dispatch
+  file_picker.py    → prompt_toolkit file browser (used by main.py /image)
+widgets/
+  input.py          → HistoryInput, ChatAutoComplete
+  tree.py           → RightClickTree, TreeContextMenu, FileTree
+  sidebar.py        → ResizeHandle, Sidebar
+  chat.py           → ImageBubble, FileViewer, CopyButton, CapabilityBadge, CapLabel, AIMessage
+  commands.py       → ChatCommands (command palette provider)
+  utils.py          → shared TUI utilities: _copy_to_clipboard, file icons, _line_height
 ```
 
 ## TUI (`app.py`)
@@ -59,13 +67,16 @@ file_picker.py   → prompt_toolkit file browser (used by main.py /image)
 | Widget | File | Purpose |
 |--------|------|---------|
 | `ChatApp` | app.py | root App, all event handlers |
-| `HistoryInput` | app.py | single-line input with Up/Down history, Ctrl+Z undo, multiline paste intercept |
-| `FileTree` | app.py | lazy-loading dir tree; double-click opens file tab |
-| `RightClickTree` | app.py | Tree subclass; intercepts right-click before `_on_mouse_down` stops propagation |
-| `TreeContextMenu` | app.py | ModalScreen right-click menu; handles cross-menu right-click via `on_mouse_down` |
-| `FileViewer` | app.py | TextArea with syntax highlighting + WSL-aware Ctrl+C multi-line copy |
-| `AIMessage` | app.py | AI response widget; markdown view + text-area select mode |
-| `Sidebar` | app.py | cwd / model / context files / git status / MCP tools |
+| `HistoryInput` | widgets/input.py | single-line input with Up/Down history, Ctrl+Z undo, multiline paste intercept |
+| `ChatAutoComplete` | widgets/input.py | slash command / path autocomplete |
+| `FileTree` | widgets/tree.py | lazy-loading dir tree; double-click opens file tab |
+| `RightClickTree` | widgets/tree.py | Tree subclass; intercepts right-click before `_on_mouse_down` stops propagation |
+| `TreeContextMenu` | widgets/tree.py | ModalScreen right-click menu; handles cross-menu right-click via `on_mouse_down` |
+| `FileViewer` | widgets/chat.py | TextArea with syntax highlighting + WSL-aware Ctrl+C multi-line copy |
+| `AIMessage` | widgets/chat.py | AI response widget; markdown view + text-area select mode |
+| `Sidebar` | widgets/sidebar.py | cwd / model / context files / git status / MCP tools |
+| `ResizeHandle` | widgets/sidebar.py | drag-to-resize handle between file tree and center |
+| `ChatCommands` | widgets/commands.py | Ctrl+P command palette: clear, switch model |
 
 ### Slash commands
 
@@ -104,7 +115,7 @@ When pasting multiline text into the prompt:
 
 ### Clipboard (WSL)
 
-`_copy_to_clipboard()` tries `xclip` first, then `clip.exe` with UTF-16-LE + BOM (`\xff\xfe`). BOM is required for `clip.exe` to treat input as Unicode; without it CJK characters become mojibake. All `subprocess.run` clipboard calls have `timeout=3` to prevent blocking app shutdown.
+`_copy_to_clipboard()` in `widgets/utils.py` tries `xclip` first, then `clip.exe` with UTF-16-LE + BOM (`\xff\xfe`). BOM is required for `clip.exe` to treat input as Unicode; without it CJK characters become mojibake. All `subprocess.run` clipboard calls have `timeout=3` to prevent blocking app shutdown.
 
 ### Key bindings
 
@@ -119,7 +130,7 @@ When pasting multiline text into the prompt:
 | `↑ / ↓` | Navigate input history |
 | `Ctrl+Z` | Undo in input |
 
-## Agent (`agent.py`)
+## Agent (`core/agent.py`)
 
 ### Tool calling loop (`Agent.chat`)
 
@@ -135,7 +146,7 @@ When pasting multiline text into the prompt:
 
 ### Adding a new model
 
-Add one entry to `REGISTRY` in `models.py`:
+Add one entry to `REGISTRY` in `core/models.py`:
 
 | 模型 | thinking | vision | tools | backend |
 |------|----------|--------|-------|---------|
@@ -156,9 +167,9 @@ Add one entry to `REGISTRY` in `models.py`:
 
 ### Adding a new tool
 
-1. Define the Ollama tool schema (like `SEARCH_TOOL` in `tools.py`)
+1. Define the Ollama tool schema (like `SEARCH_TOOL` in `core/tools.py`)
 2. Implement `async def my_tool(...) -> str`
-3. Register in `Agent.tools_map` in `agent.py`
+3. Register in `Agent.tools_map` in `core/agent.py`
 4. Pass the schema in `active_tools` list inside `chat()`
 
 ## SearXNG

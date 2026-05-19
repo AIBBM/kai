@@ -29,6 +29,33 @@
 - **不要寫多餘的 fallback**：只在系統邊界（使用者輸入、外部 API）做驗證，內部呼叫信任型別標注。
 - **不寫明顯的 what 型註解**：只有非顯而易見的 why（特殊限制、繞過 bug）才加。
 
+## 套件結構
+
+```
+app.py          → TUI 入口點
+main.py         → CLI 入口點
+core/           → 業務邏輯（與 UI 無關）
+  agent.py      → Agent, 對話歷史, 工具呼叫迴圈
+  config.py     → 所有 env-var 常數
+  models.py     → ModelProfile dataclass + REGISTRY
+  tools.py      → web_search, bash_exec, run_tool
+  mcp_client.py → MCP server 生命週期 + 工具呼叫
+  file_picker.py→ prompt_toolkit 圖片選擇器（legacy CLI 用）
+widgets/        → Textual TUI 元件
+  input.py      → HistoryInput, ChatAutoComplete
+  tree.py       → RightClickTree, TreeContextMenu, FileTree
+  sidebar.py    → ResizeHandle, Sidebar
+  chat.py       → ImageBubble, FileViewer, CopyButton, AIMessage …
+  commands.py   → ChatCommands（命令面板）
+  utils.py      → 剪貼簿、檔案圖示、_line_height 等共用工具
+```
+
+Import 規則：
+- `core/` 內部用 relative imports（`.config`、`.models`）
+- `widgets/` 內部用 relative imports（`.utils`）
+- `widgets/` 可以 import `core/`（`from core.config import MODEL`）
+- `core/` 不得 import `widgets/`
+
 ## Log 層級慣例
 
 | 層級 | 用途 |
@@ -37,7 +64,8 @@
 | `WARNING` | 可恢復的失敗（搜尋重試、schema 查詢失敗） |
 | `ERROR` | 工具呼叫完全失敗、MCP 錯誤 |
 
-log 只輸出到 stderr（`loguru` 設定於 `config.py`），不干擾 Rich 的 stdout 輸出。
+TUI 模式：log 寫入 `agent_tui.log`（`loguru` 設定於 `app.py`）。
+CLI 模式：log 輸出到 stderr，不干擾 Rich 的 stdout 輸出。
 
 ## 對話行為規範
 
