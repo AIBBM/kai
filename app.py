@@ -778,9 +778,13 @@ class ChatApp(App[None]):
                 card_class = "tool-debug tool-debug-error" if is_err else "tool-debug"
                 if not self._debug_tools:
                     if is_err:
+                        args_preview = json.dumps(args, ensure_ascii=False)
+                        if len(args_preview) > 300:
+                            args_preview = args_preview[:300] + "…"
+                        body = f"參數：{args_preview}\n\n{result[:600]}"
                         await msgs.mount(
                             Collapsible(
-                                Static(result[:400], markup=False),
+                                Static(body, markup=False),
                                 title=f"{icon} {name}  [dim]工具錯誤[/dim]",
                                 collapsed=True,
                                 classes=card_class,

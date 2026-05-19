@@ -137,7 +137,9 @@ class MCPClient:
         parts = [item.text for item in result.content if hasattr(item, "text")]
         output = "\n".join(parts) or "[no output]"
         if result.isError:
-            logger.warning(f"MCP error [{tool_name}]: {output[:500]}")
+            import json as _json
+            args_preview = _json.dumps(arguments, ensure_ascii=False)[:300]
+            logger.warning(f"MCP error [{tool_name}](args={args_preview}): {output}")
         else:
             logger.debug(f"MCP result [{tool_name}] len={len(output)}")
         return output
