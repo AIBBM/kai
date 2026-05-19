@@ -174,7 +174,9 @@ async def fetch_url(url: str) -> str:
         page_url = data.get("url", url)
         content = data.get("content", "").strip()
         if len(content) > FETCH_MAX_CHARS:
-            content = content[:FETCH_MAX_CHARS] + f"\n…（共 {len(content)} 字元，已截斷）"
+            cut = content.rfind("\n\n", 0, FETCH_MAX_CHARS)
+            content = content[:cut if cut > 0 else FETCH_MAX_CHARS]
+            content += f"\n\n…（共 {len(content)} 字元，已截斷）"
         logger.debug(f"fetch_url {url} → {len(content)} 字元")
         return f"# {title}\nURL: {page_url}\n\n{content}"
     except Exception as e:
