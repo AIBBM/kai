@@ -10,7 +10,7 @@ import httpx
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-from config import MCP_SERVERS_FILE
+from .config import MCP_SERVERS_FILE
 
 
 class MCPClient:
