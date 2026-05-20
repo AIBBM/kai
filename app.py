@@ -153,6 +153,7 @@ class ChatApp(App[None]):
         self._bash_proc: asyncio.subprocess.Process | None = None
         self._bash_worker: "Worker | None" = None  # type: ignore[name-defined]
         self._resumed_from: Path | None = None  # /resume 載入的歸檔路徑，有新訊息後清除
+        self._last_ephemeral: list[dict] | None = None  # /ask 最後一輪的問答，/save 用
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -190,6 +191,7 @@ class ChatApp(App[None]):
         self.__class__.SLASH_COMMANDS = [
             ("/clear", "清除畫面"),
             ("/ask", "臨時提問，不污染對話歷史  /ask <問題>"),
+            ("/save", "將上一次 /ask 的回答存入對話歷史"),
             ("/cls", "清除記憶並歸檔（可 /resume 恢復）"),
             ("/resume", "列出歸檔 session  /resume [編號]"),
             ("/remember", "記住規則  /remember <內容>"),
@@ -382,6 +384,14 @@ class ChatApp(App[None]):
                     self.notify("用法：/ask <問題>", severity="warning")
                 else:
                     self._send(arg, ephemeral=True)
+            elif cmd == "/save":
+                if not self._last_ephemeral:
+                    self.notify("沒有可保存的 /ask 回答", severity="warning")
+                else:
+                    self.agent.history.extend(self._last_ephemeral)
+                    self.agent.save_history()
+                    self._last_ephemeral = None
+                    self.notify("已存入對話歷史", timeout=2)
             elif cmd == "/clear":
                 await self.action_clear_screen()
             elif cmd == "/cls":
@@ -993,8 +1003,12 @@ class ChatApp(App[None]):
             prompt.placeholder = f"傳訊息給 {self.agent.profile.name}..."
             prompt.focus()
             if ephemeral and _history_snapshot is not None:
+                new_msgs = self.agent.history[len(_history_snapshot):]
+                self._last_ephemeral = new_msgs if new_msgs else None
                 self.agent.history = _history_snapshot
                 self.agent.save_history()
+                if self._last_ephemeral:
+                    self.notify("💾 /save 可將此回答存入對話歷史", timeout=4)
 
     # ── Bash 直接執行 ─────────────────────────────────────────────────────────
 
