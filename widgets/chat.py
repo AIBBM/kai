@@ -168,11 +168,15 @@ class FileViewer(TextArea):
             "start_line": start_line,
             "end_line": end_line,
         }
-        self._copy_worker(text)
+        # 主執行緒直接試 OSC52；失敗才交給 thread 用 subprocess
+        if _copy_to_clipboard(text, app=self.app):
+            self.app.notify("已複製", timeout=1.5)
+        else:
+            self._copy_worker(text)
 
     @work(thread=True)
     def _copy_worker(self, text: str) -> None:
-        ok = _copy_to_clipboard(text)
+        ok = _copy_to_clipboard(text)  # thread 不傳 app，走 subprocess 路徑
         msg = "已複製" if ok else "複製失敗（需要 xclip 或 clip.exe）"
         sev = "information" if ok else "warning"
         self.app.call_from_thread(self.app.notify, msg, severity=sev, timeout=1.5)
@@ -186,7 +190,7 @@ class CopyButton(Button):
         self._code = code
 
     async def on_button_pressed(self) -> None:
-        ok = await asyncio.to_thread(_copy_to_clipboard, self._code)
+        ok = _copy_to_clipboard(self._code, app=self.app)
         if ok:
             self.app.notify("已複製", timeout=1.5)
         else:

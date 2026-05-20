@@ -276,8 +276,17 @@ def _open_image(path: str) -> None:
         logger.warning(f"開啟圖片失敗：{e}")
 
 
-def _copy_to_clipboard(text: str) -> bool:
-    """複製文字到剪貼簿。依序嘗試 xclip → clip.exe（WSL）。"""
+def _copy_to_clipboard(text: str, app=None) -> bool:
+    """複製文字到剪貼簿。依序嘗試 App.copy_to_clipboard (OSC52) → xclip → clip.exe（WSL）。
+
+    app 只在主執行緒呼叫時傳入；thread worker 傳 None，走 subprocess 路徑。
+    """
+    if app is not None:
+        try:
+            app.copy_to_clipboard(text)
+            return True
+        except Exception:
+            pass
     try:
         subprocess.run(
             ["xclip", "-selection", "clipboard"],
