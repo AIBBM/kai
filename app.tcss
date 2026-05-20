@@ -167,7 +167,17 @@ AIMessage {
     margin: 0 0 0 0;
 }
 
+AIMessage .stream-view {
+    height: auto;
+    max-width: 100%;
+    padding: 0 1 0 1;
+    margin: 0;
+    background: transparent;
+    overflow-x: auto;
+}
+
 AIMessage .md-view {
+    display: none;
     height: auto;
     padding: 0 1 0 1;
     margin: 0;
@@ -186,6 +196,10 @@ AIMessage .ta-view {
     background: transparent;
     border: none;
     scrollbar-size: 1 1;
+}
+
+AIMessage.select-mode .stream-view {
+    display: none;
 }
 
 AIMessage.select-mode .md-view {
@@ -245,13 +259,10 @@ AutoComplete .autocomplete--highlight-match {
     border: round $primary;
     margin: 0 1 0 1;
     background: $boost;
-    border-title-color: $primary;
-    border-title-style: bold;
 }
 
 #prompt:focus {
     border: round $accent;
-    border-title-color: $accent;
 }
 
 #prompt.streaming {
@@ -357,4 +368,14 @@ ConfirmCloseScreen {
 
 .confirm-buttons Button {
     margin: 0 1;
+}
+
+/* ─── Markdown 表格：防止撐爆版面 ─── */
+MarkdownTable {
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+MarkdownTableContent {
+    max-width: 100%;
 }

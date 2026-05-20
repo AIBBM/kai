@@ -52,8 +52,53 @@ _CODE_FENCE = re.compile(r"```[\s\S]*?```|`[^`]+`")
 _INLINE_MATH = re.compile(r"\$\\?([A-Za-z]+)\$")
 
 
+_BOX_DRAWING = re.compile(r"[─-╿]")
+
+
+def _wrap_box_drawing(text: str) -> str:
+    """把含大量 box-drawing 字元的段落自動包進 code fence，防止 Markdown 換行破版。"""
+    protected: set[tuple[int, int]] = set()
+    for m in _CODE_FENCE.finditer(text):
+        protected.add((m.start(), m.end()))
+
+    def _in_code(pos: int) -> bool:
+        return any(s <= pos < e for s, e in protected)
+
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # 用行起始位置粗略判斷是否在 code block 內
+        line_start = sum(len(ln) + 1 for ln in lines[:i])
+        if not _in_code(line_start) and len(_BOX_DRAWING.findall(line)) >= 3:
+            # 收集連續的 box-drawing 段落
+            block = []
+            while i < len(lines):
+                cur = lines[i]
+                ls = sum(len(x) + 1 for x in lines[:i])
+                if not _in_code(ls) and (len(_BOX_DRAWING.findall(cur)) >= 2 or cur.strip() == ""):
+                    block.append(cur)
+                    i += 1
+                else:
+                    break
+            # 去掉尾端空行
+            while block and block[-1].strip() == "":
+                out.append(block.pop())
+            out.append("```")
+            out.extend(block)
+            out.append("```")
+        else:
+            out.append(line)
+            i += 1
+    return "\n".join(out)
+
+
 def _latex_to_unicode(text: str) -> str:
-    r"""把 AI 輸出裡的 LaTeX inline math（$\cmd$）轉成 Unicode，跳過 code block。"""
+    r"""把 AI 輸出裡的 LaTeX inline math（$\cmd$）轉成 Unicode，跳過 code block。
+    同時自動把 box-drawing 段落包進 code fence。"""
+    text = _wrap_box_drawing(text)
+
     # 先把 code block/span 位置記下來，避免在 code 裡替換
     protected: list[tuple[int, int]] = []
     for m in _CODE_FENCE.finditer(text):

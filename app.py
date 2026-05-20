@@ -30,7 +30,7 @@ from textual.widgets import (
 )
 
 from core.agent import Agent
-from core.config import BASH_TIMEOUT, MODEL, USERNAME
+from core.config import BASH_TIMEOUT, DEBUG_TOOLS, MODEL, USERNAME
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
 from widgets.utils import _IMAGE_EXTS, _SUFFIX_TO_LANG
@@ -130,16 +130,19 @@ class ChatApp(App[None]):
 
     def __init__(self) -> None:
         super().__init__()
-        # Textual 8 adds .with_tooltip() to every Markdown table cell; the Tooltip
-        # widget mounts on Screen's _tooltips layer (not inside AIMessage), so CSS
-        # selectors can't reach it, and it uses inline display=True which overrides CSS.
-        self._disable_tooltips = True
+        # Textual 8 的 MarkdownTableCellContents 在每個 header cell 呼叫 .with_tooltip()，
+        # Tooltip 掛在 Screen._tooltips 層，累積多了會干擾佈局。直接 patch 成 no-op。
+        try:
+            from textual.widgets._markdown import MarkdownTableCellContents
+            MarkdownTableCellContents.with_tooltip = lambda self, *a, **kw: self
+        except Exception:
+            pass
         self.agent = Agent(model=MODEL)
         self.scroll_sensitivity_y = 5.0
         self._spin_idx = 0
         self._spin_label = "生成中"
         self._at_mention_re = re.compile(r'(?:(?<=\s)|^)@(\S+)')
-        self._debug_tools = False
+        self._debug_tools = DEBUG_TOOLS
         self._think_override: bool | None = None
         self._input_history: list[str] = _load_prompt_history()
         self._history_idx: int = -1
@@ -456,7 +459,7 @@ class ChatApp(App[None]):
 
         msgs = self.query_one("#messages", VerticalScroll)
         await msgs.mount(
-            Static(f"[bold]Duncan[/bold]\n{text}", markup=True, classes="user-bubble")
+            Static(f"[bold]{USERNAME}[/bold]\n{text}", markup=True, classes="user-bubble")
         )
         msgs.scroll_end(animate=False)
 
@@ -527,8 +530,8 @@ class ChatApp(App[None]):
         return files
 
     def _update_prompt_title(self) -> None:
-        base = "Duncan ❯"
-        suffix = "  [bold yellow]🔧 debug[/bold yellow]" if self._debug_tools else ""
+        base = f"[bold]{USERNAME}[/bold] [dim]❯[/dim]"
+        suffix = "  [dim]🔧 debug[/dim]" if self._debug_tools else ""
         self.query_one("#prompt", HistoryInput).border_title = base + suffix
 
     def _thinking_active(self) -> bool:
@@ -792,7 +795,8 @@ class ChatApp(App[None]):
 
         def _tick() -> None:
             self._spin_idx = (self._spin_idx + 1) % len(SPINNER)
-            prompt.border_title = f"{SPINNER[self._spin_idx]} {self._spin_label}"
+            dbg = "  [dim]🔧 debug[/dim]" if self._debug_tools else ""
+            prompt.border_title = f"{SPINNER[self._spin_idx]} {self._spin_label}{dbg}"
 
         timer = self.set_interval(0.08, _tick)
         prompt.add_class("streaming")
@@ -1044,8 +1048,8 @@ class ChatApp(App[None]):
                 "TERM": "xterm-256color",
                 "COLUMNS": "120",
             }
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
+            proc = await asyncio.create_subprocess_exec(
+                "/bin/bash", "-c", cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,

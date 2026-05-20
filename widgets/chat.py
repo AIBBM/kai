@@ -4,6 +4,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from core.config import USERNAME
+
+from rich.text import Text as RichText
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -74,7 +77,7 @@ class ImageBubble(Widget):
         except Exception:
             meta = "（無法讀取）"
         yield Static(
-            f"[bold]Duncan[/bold]  🖼 {name}  [dim]{meta}[/dim]",
+            f"[bold]{USERNAME}[/bold]  🖼 {name}  [dim]{meta}[/dim]",
             markup=True,
             classes="image-bubble-header",
         )
@@ -210,13 +213,14 @@ class CapLabel(Static):
 
 
 class AIMessage(Widget):
-    """AI 回應：預設 Markdown 渲染，右鍵切換 TextArea 選取模式。"""
+    """AI 回應：streaming 用 Static 純文字，完成後切換為 Markdown；右鍵切換 TextArea 選取模式。"""
 
     can_focus = False
     _raw: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Markdown("", classes="md-view")
+        yield Static("", classes="stream-view", markup=False)   # 串流期間顯示
+        yield Markdown("", classes="md-view")      # 完成後顯示
         yield TextArea(
             "",
             read_only=True,
@@ -228,12 +232,21 @@ class AIMessage(Widget):
 
     async def update_content(self, text: str, final: bool = False) -> None:
         self._raw = text
-        await self.query_one(".md-view", Markdown).update(_latex_to_unicode(text))
-        if final:
-            ta = self.query_one(".ta-view", TextArea)
-            ta.text = text
-            ta.styles.height = max(4, min(_line_height(text) + 1, 50))
-            await self._add_copy_buttons()
+        if not final:
+            # 串流中：用 RichText 顯示，overflow='fold' 強制換行不撐爆 layout
+            self.query_one(".stream-view", Static).update(
+                RichText(text, overflow="fold", no_wrap=False)
+            )
+            return
+        # 完成：做一次 Markdown render，隱藏 stream-view、顯示 md-view
+        self.query_one(".stream-view", Static).display = False
+        md = self.query_one(".md-view", Markdown)
+        md.display = True
+        await md.update(_latex_to_unicode(text))
+        ta = self.query_one(".ta-view", TextArea)
+        ta.text = text
+        ta.styles.height = max(4, min(_line_height(text) + 1, 50))
+        await self._add_copy_buttons()
 
     async def _add_copy_buttons(self) -> None:
         from textual.widgets._markdown import MarkdownFence

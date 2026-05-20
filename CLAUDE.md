@@ -44,7 +44,7 @@ widgets/
   sidebar.py        → ResizeHandle, Sidebar
   chat.py           → ImageBubble, FileViewer, CopyButton, CapabilityBadge, CapLabel, AIMessage
   commands.py       → ChatCommands (command palette provider)
-  utils.py          → shared TUI utilities: _copy_to_clipboard, file icons, _line_height
+  utils.py          → shared TUI utilities: _copy_to_clipboard, file icons, _line_height, _wrap_box_drawing
 ```
 
 ## TUI (`app.py`)
@@ -69,11 +69,11 @@ widgets/
 | `ChatApp` | app.py | root App, all event handlers |
 | `HistoryInput` | widgets/input.py | single-line input with Up/Down history, Ctrl+Z undo, multiline paste intercept |
 | `ChatAutoComplete` | widgets/input.py | slash command / path autocomplete |
-| `FileTree` | widgets/tree.py | lazy-loading dir tree; double-click opens file tab |
-| `RightClickTree` | widgets/tree.py | Tree subclass; intercepts right-click before `_on_mouse_down` stops propagation |
-| `TreeContextMenu` | widgets/tree.py | ModalScreen right-click menu; handles cross-menu right-click via `on_mouse_down` |
-| `FileViewer` | widgets/chat.py | TextArea with syntax highlighting + WSL-aware Ctrl+C multi-line copy |
-| `AIMessage` | widgets/chat.py | AI response widget; markdown view + text-area select mode |
+| `FileTree` | widgets/tree.py | lazy-loading dir tree; double-click opens file tab; Ctrl+click / Space multi-select for batch delete; 2s deep fs watcher |
+| `RightClickTree` | widgets/tree.py | Tree subclass; intercepts right-click + Ctrl+click; Space/Ctrl+A/Escape key bindings |
+| `TreeContextMenu` | widgets/tree.py | ModalScreen right-click menu; shows "刪除選取 (N 項)" when multi-selected |
+| `FileViewer` | widgets/chat.py | TextArea with syntax highlighting + WSL-aware Ctrl+C multi-line copy; mtime polling for external change detection |
+| `AIMessage` | widgets/chat.py | AI response widget; Static stream-view during streaming, Markdown md-view on final |
 | `Sidebar` | widgets/sidebar.py | cwd / model / context files / git status / MCP tools |
 | `ResizeHandle` | widgets/sidebar.py | drag-to-resize handle between file tree and center |
 | `ChatCommands` | widgets/commands.py | Ctrl+P command palette: clear, switch model |
@@ -82,7 +82,8 @@ widgets/
 
 | Command | Action |
 |---------|--------|
-| `/clear` | Clear chat history and UI |
+| `/clear` | Archive history to `.history/`, clear UI (guard: skips if only system msg) |
+| `/resume [N]` | List or restore archived sessions from `.history/` |
 | `/model <name>` | Switch model (hot-swap, preserves history) |
 | `/add <path>` | Add file to context |
 | `/del <path>` | Remove file from context |
@@ -90,12 +91,47 @@ widgets/
 | `/think` | Toggle thinking mode |
 | `/debug` | Toggle tool debug cards |
 | `/image <path> [q]` | Send image to vision model |
+| `/ask <question>` | Ephemeral question — not saved to history |
+| `/save` | Promote last `/ask` answer into permanent history |
+| `/remember <note>` | Write note to `AGENT_NOTES.md` (persistent across sessions) |
 
 ### `!` bash commands
 
-Any input starting with `!` runs as a shell command. Special case:
+Any input starting with `!` runs as a shell command via `/bin/bash -c` (supports brace expansion, `$((expr))`, `[[` etc.).
+Special case:
 - `!cd <path>` — intercepted, calls `os.chdir` (subprocess `cd` has no effect on parent process)
 - After every bash command: file tree and git sidebar auto-refresh
+
+### File tree multi-select
+
+| Operation | Effect |
+|-----------|--------|
+| `Ctrl+click` | Toggle item in multi-select (shows green ✓) |
+| `Space` | Toggle cursor item; if anchor set, range-select from anchor to cursor |
+| `Ctrl+A` | Select all / deselect all visible nodes |
+| `Escape` | Clear multi-select (if none, focus prompt) |
+| Right-click on selected item | Shows "刪除選取 (N 項)" for batch delete |
+
+Multi-select state is cleared after delete and after `refresh_tree`.
+
+### File tree filesystem watcher
+
+`FileTree._check_external_change` runs every 2 seconds in a background thread (via `run_worker(thread=True)`). It does a deep `os.walk` (skipping `_HIDDEN_DIRS`) comparing all file/dir mtimes. Any external change (VSCode delete, `touch`, etc.) triggers `refresh_tree`. The scan is off the event loop to prevent render glitches.
+
+### FileViewer external change detection
+
+`FileViewer._check_external_change` polls the file's `st_mtime` every 1 second. If changed externally (and not modified locally), it reloads content and shows a toast. `action_save` updates `_mtime` after write to suppress false triggers.
+
+### Streaming rendering
+
+During streaming (`update_content(final=False)`): text is written to a `Static(markup=False)` widget using `RichText(overflow="fold")` — no markdown parsing, O(1) cost regardless of length.
+
+On completion (`update_content(final=True)`): `stream-view` is hidden, `md-view` (Markdown widget) is shown and rendered once. This prevents the slowdown where long responses got progressively slower to render.
+
+### Markdown rendering fixes
+
+- `MarkdownTableCellContents.with_tooltip` is patched to no-op in `ChatApp.__init__` to prevent Tooltip widgets accumulating on Screen's `_tooltips` layer.
+- `_wrap_box_drawing()` in `widgets/utils.py` auto-detects lines with ≥3 box-drawing characters (U+2500–U+257F range) and wraps them in a code fence before Markdown render, preventing word-wrap from destroying ASCII diagrams.
 
 ### Directory switching (`_do_cd`)
 
@@ -105,6 +141,12 @@ When changing directory (via `/cd` or `!cd`):
 3. `agent.reset_history()` — clears and reloads from new cwd's `history.json`
 4. Clears chat UI and context files
 5. Refreshes file tree and sidebar
+
+### Session history (`/cls` and `/resume`)
+
+`/clear` archives `history.json` to `.history/YYYYMMDD_HHMMSS_N-turns.json` before clearing (guard: skips if history has only system message, or if just resumed with no new messages via `_resumed_from` flag).
+
+`/resume` lists archives with timestamp, turn count, and first user message preview. `/resume N` restores session N by copying the archive back to `history.json` and reloading.
 
 ### Multiline paste (`HistoryInput`)
 
@@ -126,9 +168,11 @@ When pasting multiline text into the prompt:
 | `Ctrl+T` | Toggle file tree |
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+W` | Close active tab (priority binding) |
-| `Escape` | Cancel streaming response |
+| `Escape` | Cancel streaming response / clear tree multi-select |
 | `↑ / ↓` | Navigate input history |
 | `Ctrl+Z` | Undo in input |
+| `Space` (in tree) | Toggle current node in multi-select / range-select from anchor |
+| `Ctrl+A` (in tree) | Select all / deselect all |
 
 ## Agent (`core/agent.py`)
 
@@ -142,7 +186,7 @@ When pasting multiline text into the prompt:
 
 ### History
 
-`HISTORY_FILE = Path("history.json")` — relative to cwd at runtime. Each project directory has its own history.
+`HISTORY_FILE = Path("history.json")` — relative to cwd at runtime. Each project directory has its own history. Archives go to `.history/` (gitignored).
 
 ### Adding a new model
 
@@ -171,6 +215,19 @@ Add one entry to `REGISTRY` in `core/models.py`:
 2. Implement `async def my_tool(...) -> str`
 3. Register in `Agent.tools_map` in `core/agent.py`
 4. Pass the schema in `active_tools` list inside `chat()`
+
+## Environment variables (`.env`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODEL` | `qwen3-vl:4b` | Active model |
+| `DEBUG_TOOLS` | `0` | Set `1` to enable tool debug cards on startup |
+| `NUM_CTX` | `0` | Context window override (0 = model default) |
+| `MAX_TOOL_CALLS` | `15` | Max tool calls per turn |
+| `TEMPERATURE` | `0.6` | Generation temperature |
+| `USERNAME` | `你` | Display name in chat bubbles and prompt title |
+| `BASH_TIMEOUT` | `30` | `bash_exec` default timeout (seconds) |
+| `SEARXNG_URL` | `http://localhost:8888/search` | SearXNG API endpoint |
 
 ## SearXNG
 

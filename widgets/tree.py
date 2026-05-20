@@ -8,6 +8,7 @@ from pathlib import Path
 
 from textual import events
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
@@ -19,7 +20,7 @@ from .utils import _HIDDEN_DIRS, _copy_to_clipboard, _file_icon
 
 
 class ConfirmDeleteScreen(ModalScreen[bool]):
-    """刪除確認對話框。"""
+    """刪除確認對話框；支援單項或批次。"""
 
     DEFAULT_CSS = """
     ConfirmDeleteScreen {
@@ -47,15 +48,22 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
     }
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, paths: list[Path]) -> None:
         super().__init__()
-        self._path = path
+        self._paths = paths
 
     def compose(self) -> ComposeResult:
-        kind = "資料夾" if self._path.is_dir() else "檔案"
         with Vertical():
-            yield Label(f"刪除{kind}？")
-            yield Label(self._path.name, markup=False)
+            if len(self._paths) == 1:
+                kind = "資料夾" if self._paths[0].is_dir() else "檔案"
+                yield Label(f"刪除{kind}？")
+                yield Label(self._paths[0].name, markup=False)
+            else:
+                yield Label(f"刪除 {len(self._paths)} 個項目？")
+                names = "\n".join(p.name for p in self._paths[:5])
+                if len(self._paths) > 5:
+                    names += f"\n… 還有 {len(self._paths) - 5} 個"
+                yield Label(names, markup=False)
             with Horizontal():
                 yield Button("刪除", id="confirm", variant="error")
                 yield Button("取消", id="cancel")
@@ -84,7 +92,13 @@ def _copy_filename_bg(app, path: Path) -> None:
 
 
 class RightClickTree(Tree):
-    """Tree subclass that intercepts right-click before internal _on_mouse_down stops it."""
+    """Tree subclass：攔截右鍵、Ctrl+click；Space/Ctrl+A 鍵盤多選。"""
+
+    BINDINGS = [
+        Binding("space", "toggle_select", "選取", show=False),
+        Binding("ctrl+a", "select_all", "全選", show=False),
+        Binding("escape", "clear_select", "清除選取", show=False),
+    ]
 
     class NodeRightClicked(Message):
         def __init__(self, path: Path, sx: int, sy: int) -> None:
@@ -93,22 +107,52 @@ class RightClickTree(Tree):
             self.sx = sx
             self.sy = sy
 
+    class NodeCtrlClicked(Message):
+        def __init__(self, path: Path, line: int) -> None:
+            super().__init__()
+            self.path = path
+            self.line = line
+
+    class SpacePressed(Message):
+        pass
+
+    class SelectAllPressed(Message):
+        pass
+
+    class ClearSelectPressed(Message):
+        pass
+
     def on_mouse_down(self, event: events.MouseDown) -> None:
-        if event.button != 3:
-            return
         line = int(event.y) + int(self.scroll_y)
         node = self.get_node_at_line(line)
         path = node.data if node else None
-        if isinstance(path, Path):
+
+        if event.button == 3:
+            if isinstance(path, Path):
+                self.move_cursor(node)
+                event.stop()
+                self.post_message(
+                    self.NodeRightClicked(path, event.screen_x, event.screen_y)
+                )
+            return
+
+        if event.button == 1 and isinstance(path, Path) and event.ctrl:
             self.move_cursor(node)
             event.stop()
-            self.post_message(
-                self.NodeRightClicked(path, event.screen_x, event.screen_y)
-            )
+            self.post_message(self.NodeCtrlClicked(path, line))
+
+    def action_toggle_select(self) -> None:
+        self.post_message(self.SpacePressed())
+
+    def action_select_all(self) -> None:
+        self.post_message(self.SelectAllPressed())
+
+    def action_clear_select(self) -> None:
+        self.post_message(self.ClearSelectPressed())
 
 
 class TreeContextMenu(ModalScreen):
-    """檔案樹右鍵選單。"""
+    """檔案樹右鍵選單；多選時顯示批次刪除。"""
 
     DEFAULT_CSS = """
     TreeContextMenu {
@@ -116,7 +160,7 @@ class TreeContextMenu(ModalScreen):
         align: left top;
     }
     TreeContextMenu OptionList {
-        width: 22;
+        width: 26;
         height: auto;
         max-height: 12;
         border: round $primary;
@@ -132,13 +176,25 @@ class TreeContextMenu(ModalScreen):
         self._path = path
         self._sx = sx
         self._sy = sy
+        self._batch_paths: list[Path] = []
 
     def compose(self) -> ComposeResult:
-        yield OptionList("複製檔名", "刪除", id="ctx-options")
+        try:
+            ft = self.app.query_one(FileTree)
+            selected = ft._multi_selected
+        except Exception:
+            selected = set()
+
+        if len(selected) >= 2 and self._path in selected:
+            self._batch_paths = list(selected)
+            yield OptionList("複製檔名", f"刪除選取 ({len(selected)} 項)", id="ctx-options")
+        else:
+            self._batch_paths = []
+            yield OptionList("複製檔名", "刪除", id="ctx-options")
 
     def on_mount(self) -> None:
         ol = self.query_one(OptionList)
-        x = min(self._sx + 6, self.app.size.width - 24)
+        x = min(self._sx + 6, self.app.size.width - 28)
         y = min(self._sy, self.app.size.height - 8)
         ol.styles.offset = (x, y)
 
@@ -153,29 +209,37 @@ class TreeContextMenu(ModalScreen):
             self.dismiss()
             app.run_worker(lambda: _copy_filename_bg(app, path), thread=True)
         elif event.option_index == self._OPT_DELETE:
-            path = self._path
+            paths = self._batch_paths if self._batch_paths else [self._path]
             app = self.app
             self.dismiss()
 
             async def _do_delete() -> None:
                 confirmed = await app.push_screen(
-                    ConfirmDeleteScreen(path), wait_for_dismiss=True
+                    ConfirmDeleteScreen(paths), wait_for_dismiss=True
                 )
                 if not confirmed:
                     return
+                failed = []
+                for p in paths:
+                    try:
+                        if p.is_dir():
+                            shutil.rmtree(p)
+                        else:
+                            p.unlink()
+                    except Exception as e:
+                        failed.append(f"{p.name}: {e}")
+                if failed:
+                    app.notify("刪除失敗：" + "；".join(failed), severity="error")
                 try:
-                    if path.is_dir():
-                        shutil.rmtree(path)
-                    else:
-                        path.unlink()
-                except Exception as e:
-                    app.notify(f"刪除失敗：{e}", severity="error")
-                    return
-                try:
-                    app.query_one(FileTree).refresh_tree()
+                    ft = app.query_one(FileTree)
+                    ft.clear_multi_select()
+                    ft.refresh_tree()
                 except Exception:
                     pass
-                app.notify(f"已刪除：{path.name}", timeout=2)
+                count = len(paths) - len(failed)
+                if count:
+                    label = paths[0].name if len(paths) == 1 else f"{count} 個項目"
+                    app.notify(f"已刪除：{label}", timeout=2)
 
             app.call_after_refresh(lambda: app.run_worker(_do_delete()))
         else:
@@ -219,7 +283,7 @@ class TreeContextMenu(ModalScreen):
 
 
 class FileTree(Widget):
-    """左側懶載入檔案樹；選取檔案後填入 prompt。"""
+    """左側懶載入檔案樹；選取檔案後填入 prompt；Ctrl/Shift+click 多選批次刪除。"""
 
     class FileChosen(Message):
         def __init__(self, path: Path) -> None:
@@ -234,9 +298,140 @@ class FileTree(Widget):
         yield tree
 
     def on_mount(self) -> None:
-        self._populate(self.query_one(RightClickTree).root)
         self._last_selected: Path | None = None
         self._last_select_time: float = 0.0
+        self._multi_selected: set[Path] = set()
+        self._path_to_node: dict[Path, TreeNode] = {}
+        self._anchor_line: int | None = None
+        self._dir_mtimes: dict[str, float] = self._scan_mtimes(Path(os.getcwd()))
+        self._populate(self.query_one(RightClickTree).root)
+        self.set_interval(2.0, self._check_external_change)
+
+    # ── multi-select ──────────────────────────────────────────────────────────
+
+    def _node_label(self, path: Path, selected: bool) -> str:
+        mark = "[bold green]✓[/bold green] " if selected else ""
+        if path.is_dir():
+            return f"{mark}📁 {path.name}"
+        return f"{mark}{_file_icon(path)}{path.name}"
+
+    def _set_node_selected(self, path: Path, selected: bool) -> None:
+        node = self._path_to_node.get(path)
+        if node:
+            node.set_label(self._node_label(path, selected))
+
+    def _toggle_path(self, path: Path) -> None:
+        if path in self._multi_selected:
+            self._multi_selected.discard(path)
+            self._set_node_selected(path, False)
+        else:
+            self._multi_selected.add(path)
+            self._set_node_selected(path, True)
+
+    def _select_range(self, from_line: int, to_line: int) -> None:
+        tree = self.query_one(RightClickTree)
+        lo, hi = min(from_line, to_line), max(from_line, to_line)
+        for line in range(lo, hi + 1):
+            node = tree.get_node_at_line(line)
+            if node and isinstance(node.data, Path):
+                path = node.data
+                self._multi_selected.add(path)
+                self._path_to_node[path] = node
+                self._set_node_selected(path, True)
+
+    def _cursor_line(self) -> int | None:
+        tree = self.query_one(RightClickTree)
+        node = tree.cursor_node
+        if node is None:
+            return None
+        for i in range(tree.last_line + 1):
+            if tree.get_node_at_line(i) is node:
+                return i
+        return None
+
+    def clear_multi_select(self) -> None:
+        for path in list(self._multi_selected):
+            self._set_node_selected(path, False)
+        self._multi_selected.clear()
+        self._anchor_line = None
+
+    def on_right_click_tree_node_ctrl_clicked(
+        self, event: RightClickTree.NodeCtrlClicked
+    ) -> None:
+        self._toggle_path(event.path)
+        self._anchor_line = event.line
+
+    def on_right_click_tree_space_pressed(
+        self, event: RightClickTree.SpacePressed
+    ) -> None:
+        tree = self.query_one(RightClickTree)
+        node = tree.cursor_node
+        if not node or not isinstance(node.data, Path):
+            return
+        line = self._cursor_line()
+        if self._anchor_line is not None and self._multi_selected:
+            # 有 anchor：把 anchor 到目前游標的範圍全選
+            self._select_range(self._anchor_line, line or self._anchor_line)
+            self._anchor_line = line
+        else:
+            self._toggle_path(node.data)
+            self._anchor_line = line
+
+    def on_right_click_tree_select_all_pressed(
+        self, event: RightClickTree.SelectAllPressed
+    ) -> None:
+        tree = self.query_one(RightClickTree)
+        if self._multi_selected:
+            self.clear_multi_select()
+        else:
+            for i in range(tree.last_line + 1):
+                node = tree.get_node_at_line(i)
+                if node and isinstance(node.data, Path):
+                    self._multi_selected.add(node.data)
+                    self._path_to_node[node.data] = node
+                    self._set_node_selected(node.data, True)
+
+    def on_right_click_tree_clear_select_pressed(
+        self, event: RightClickTree.ClearSelectPressed
+    ) -> None:
+        if self._multi_selected:
+            self.clear_multi_select()
+        else:
+            self.app.query_one("#prompt").focus()
+
+    # ── file system watcher ───────────────────────────────────────────────────
+
+    def _scan_mtimes(self, root: Path) -> dict[str, float]:
+        result: dict[str, float] = {}
+        try:
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames if d not in _HIDDEN_DIRS]
+                p = Path(dirpath)
+                try:
+                    result[str(p)] = p.stat().st_mtime
+                except OSError:
+                    pass
+                for fname in filenames:
+                    fp = p / fname
+                    try:
+                        result[str(fp)] = fp.stat().st_mtime
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+        return result
+
+    def _check_external_change(self) -> None:
+        cwd = Path(os.getcwd())
+        self.run_worker(lambda: self._scan_worker(cwd), thread=True)
+
+    def _scan_worker(self, cwd: Path) -> None:
+        new_mtimes = self._scan_mtimes(cwd)
+        if new_mtimes != self._dir_mtimes:
+            self._dir_mtimes = new_mtimes
+            self.app.call_from_thread(self.refresh_tree)
+
+    # ── tree population ───────────────────────────────────────────────────────
 
     def _populate(self, node: TreeNode[Path]) -> None:
         path: Path | None = node.data
@@ -253,11 +448,14 @@ class FileTree(Widget):
         for entry in entries:
             if entry.name in _HIDDEN_DIRS:
                 continue
+            selected = entry in self._multi_selected
+            label = self._node_label(entry, selected)
             if entry.is_dir():
-                child = node.add(f"📁 {entry.name}", data=entry)
+                child = node.add(label, data=entry)
                 child.add_leaf("…", data=None)
             else:
-                node.add_leaf(f"{_file_icon(entry)}{entry.name}", data=entry)
+                child = node.add_leaf(label, data=entry)
+            self._path_to_node[entry] = child
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         node = event.node
@@ -284,9 +482,11 @@ class FileTree(Widget):
         self.app.push_screen(TreeContextMenu(event.path, event.sx, event.sy))
 
     def refresh_tree(self) -> None:
+        self._path_to_node.clear()
         tree = self.query_one(RightClickTree)
         cwd = Path(os.getcwd())
         tree.root.label = cwd.name
         tree.root.data = cwd
         self._populate(tree.root)
         tree.root.expand()
+        self._dir_mtimes = self._scan_mtimes(cwd)
