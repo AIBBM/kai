@@ -189,6 +189,7 @@ class ChatApp(App[None]):
         self.__class__.SLASH_COMMANDS = [
             ("/clear", "清除畫面"),
             ("/cls", "清除記憶（畫面 + 對話歷史）"),
+            ("/remember", "記住規則  /remember <內容>"),
             ("/compact", "用 Gemini 壓縮對話歷史（釋放 context）"),
             ("/image", "傳送圖片給模型  /image <路徑> [問題]"),
             ("/debug", "切換工具除錯模式（顯示工具參數與回應）"),
@@ -266,7 +267,7 @@ class ChatApp(App[None]):
             ]
             if fs_paths:
                 self.agent.mcp_context += f"\n檔案系統可存取目錄：{', '.join(fs_paths)}"
-            self.agent._reset_date()
+            self.agent._rebuild_system_prompt()
             sidebar.set_mcp(mcp.server_summary)
             logger.info(f"MCP 初始化完成：{mcp.tool_names}")
             await self._mcp_done.wait()
@@ -377,6 +378,15 @@ class ChatApp(App[None]):
                 await self.action_clear_screen()
             elif cmd == "/cls":
                 await self.action_clear()
+            elif cmd == "/remember":
+                if not arg:
+                    self.notify("用法：/remember <要記住的內容>", severity="warning")
+                else:
+                    notes_path = Path(os.getcwd()) / "AGENT_NOTES.md"
+                    with open(notes_path, "a", encoding="utf-8") as _f:
+                        _f.write(f"\n- {arg}")
+                    self.agent._rebuild_system_prompt()
+                    self.notify("✅ 已記錄到 AGENT_NOTES.md", severity="information")
             elif cmd == "/compact":
                 await self.action_compact()
             elif cmd == "/model" and arg:
@@ -629,8 +639,8 @@ class ChatApp(App[None]):
         self.notify(f"已切換至 {target}", severity="information")
 
     async def action_compact(self) -> None:
-        if not self.agent._gemini:
-            self.notify("需要 GEMINI_API_KEY 才能使用 compact", severity="warning")
+        if not self.agent._gemini and not self.agent._deepseek:
+            self.notify("需要 GEMINI_API_KEY 或 DEEPSEEK_API_KEY 才能使用 compact", severity="warning")
             return
         msgs = self.query_one("#messages", VerticalScroll)
         await msgs.mount(Static("⚡ 正在用 Gemini 壓縮對話歷史…", classes="error-msg", markup=False))
@@ -649,7 +659,7 @@ class ChatApp(App[None]):
     async def action_clear(self) -> None:
         await self.query_one("#messages", VerticalScroll).remove_children()
         self.agent.history = []
-        self.agent._reset_date()
+        self.agent._rebuild_system_prompt()
         self.agent.save_history()
         self.sub_title = self.agent.profile.name
 
@@ -667,7 +677,7 @@ class ChatApp(App[None]):
         self.agent.history = old_history
         self.agent.mcp_client = old_mcp
         self.agent.mcp_context = old_ctx
-        self.agent._reset_date()
+        self.agent._rebuild_system_prompt()
         self._think_override = None
         self._sync_cap_bar()
         prompt = self.query_one("#prompt", HistoryInput)
@@ -685,6 +695,7 @@ class ChatApp(App[None]):
         stream_msg: AIMessage | None = None
         buf: list[str] = []
 
+        self.agent._cancelled = False
         self._spin_idx = 0
         self._spin_label = "等待回覆"
 
@@ -757,9 +768,16 @@ class ChatApp(App[None]):
                 if gen_tok:
                     parts.append(f"{gen_tok} tokens")
                 if prompt_tok:
-                    num_ctx = self.agent.profile.num_ctx
-                    pct = prompt_tok * 100 // num_ctx
-                    parts.append(f"ctx {pct}% ({prompt_tok}/{num_ctx})")
+                    if self.agent.profile.backend == "ollama":
+                        num_ctx = self.agent.profile.num_ctx
+                        pct = prompt_tok * 100 // num_ctx
+                        parts.append(f"ctx {pct}% ({prompt_tok}/{num_ctx})")
+                    else:
+                        parts.append(f"輸入 {prompt_tok} tokens")
+                cache_hit = self.agent._last_cache_hit
+                if cache_hit is not None and prompt_tok:
+                    hit_pct = cache_hit * 100 // prompt_tok
+                    parts.append(f"cache {hit_pct}%")
                 stats = " · ".join(parts)
                 at_bot = _at_bottom()
                 await msgs.mount(Static(stats, classes="stats", markup=False))
@@ -850,12 +868,14 @@ class ChatApp(App[None]):
 
         except Exception as e:
             err_str = str(e).lower()
-            if any(kw in err_str for kw in ("context", "too long", "window", "kv cache")) and self.agent._gemini:
+            if any(kw in err_str for kw in ("context", "too long", "window", "kv cache")) and (self.agent._gemini or self.agent._deepseek):
                 # Context overflow → auto compact via gemini-2.0-flash，然後重試
+                logger.warning(f"context overflow，啟動 autocompact：{e}")
                 try:
                     await msgs.mount(Static("⚡ Context 已滿，正在用 Gemini 壓縮對話歷史…", classes="error-msg", markup=False))
                     msgs.scroll_end(animate=False)
                     await self.agent.compact_history()
+                    logger.info("autocompact 完成，重試對話")
                     await msgs.mount(Static("✅ 已壓縮，繼續對話", classes="error-msg", markup=False))
                     msgs.scroll_end(animate=False)
                     stream_msg = None
@@ -874,6 +894,10 @@ class ChatApp(App[None]):
                     logger.exception("compact + retry error")
                     await msgs.mount(Static(f"❌ 壓縮後仍失敗：{e2}", classes="error-msg", markup=False))
                     msgs.scroll_end(animate=False)
+            elif isinstance(e, TimeoutError):
+                logger.error(f"Ollama stream timeout：{e}")
+                await msgs.mount(Static(f"⏱ Ollama 無回應（逾時）：{e}", classes="error-msg", markup=False))
+                msgs.scroll_end(animate=False)
             else:
                 logger.exception("chat error")
                 await msgs.mount(Static(f"❌ 錯誤：{e}", classes="error-msg", markup=False))

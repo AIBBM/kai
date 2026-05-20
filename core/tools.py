@@ -218,30 +218,59 @@ async def fetch_urls(urls: list) -> str:
 
 
 async def bash_exec(command: str, timeout: int = 0) -> str:
-    """執行 bash 指令，回傳 stdout + stderr。"""
+    """執行 bash 指令，回傳 stdout + stderr。
+
+    使用 proc.wait() 而非 communicate()，只等 shell 本身退出。
+    讀取用獨立 task，shell 退出後立即 cancel，避免背景程序繼承 pipe 導致 deadlock。
+    """
     t = timeout or BASH_TIMEOUT
+
+    async def _collect(reader: asyncio.StreamReader, chunks: list[bytes]) -> None:
+        try:
+            while chunk := await reader.read(65536):
+                chunks.append(chunk)
+        except Exception:
+            pass
+
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=t)
-        out = stdout.decode(errors="replace").strip()
-        err = stderr.decode(errors="replace").strip()
+        out_chunks: list[bytes] = []
+        err_chunks: list[bytes] = []
+        out_task = asyncio.create_task(_collect(proc.stdout, out_chunks))
+        err_task = asyncio.create_task(_collect(proc.stderr, err_chunks))
+
+        timed_out = False
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=t)
+        except asyncio.TimeoutError:
+            timed_out = True
+        finally:
+            # shell 退出（或超時）後立即停止讀取，防止背景程序的 pipe 繼承造成卡死
+            out_task.cancel()
+            err_task.cancel()
+            await asyncio.gather(out_task, err_task, return_exceptions=True)
+
+        if timed_out:
+            logger.debug(f"bash_exec timeout {t}s: {command[:60]}")
+            return f"[Error] 超時 {t}s"
+
+        out = b"".join(out_chunks).decode(errors="replace").strip()
+        err = b"".join(err_chunks).decode(errors="replace").strip()
         parts = []
         if out:
             parts.append(out)
         if err:
-            # exit 0 時 stderr 通常是進度訊息（uv/cargo/npm 等工具的慣例）
             parts.append(f"[stderr]\n{err}" if proc.returncode != 0 else err)
         result = "\n".join(parts) or "(no output)"
         logger.debug(f"bash_exec exit={proc.returncode}: {command[:60]}")
         if proc.returncode != 0:
             result = f"[exit code {proc.returncode}]\n{result}"
         return result
-    except asyncio.TimeoutError:
-        return f"[Error] 超時 {t}s"
+
     except Exception as e:
         return f"[Error] {e}"
 

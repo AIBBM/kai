@@ -70,6 +70,21 @@ REGISTRY: dict[str, ModelProfile] = {
         supports_tools=True,
         num_ctx=32768,  # 9.6GB CPU only，同上
     ),
+    # ── DeepSeek (DeepSeek API) ───────────────────────────────────────────────
+    "deepseek-v4-flash": ModelProfile(
+        "deepseek-v4-flash",
+        supports_thinking=True,
+        supports_vision=False,
+        supports_tools=True,
+        backend="deepseek",
+    ),
+    "deepseek-v4-pro": ModelProfile(
+        "deepseek-v4-pro",
+        supports_thinking=True,
+        supports_vision=False,
+        supports_tools=True,
+        backend="deepseek",
+    ),
     # ── Gemini (Google API) ──────────────────────────────────────────────────
     "gemini-2.0-flash": ModelProfile(
         "gemini-2.0-flash",

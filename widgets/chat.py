@@ -95,9 +95,33 @@ class FileViewer(TextArea):
         super().__init__(*args, **kwargs)
         self._file_path = file_path
         self._modified = False
+        self._mtime: float = 0.0
 
     def on_mount(self) -> None:
-        self._modified = False  # 載入時的初始化不算修改
+        self._modified = False
+        if self._file_path:
+            try:
+                self._mtime = self._file_path.stat().st_mtime
+            except OSError:
+                pass
+            self.set_interval(1.0, self._check_external_change)
+
+    def _check_external_change(self) -> None:
+        if self._modified or not self._file_path:
+            return
+        try:
+            mtime = self._file_path.stat().st_mtime
+        except OSError:
+            return
+        if mtime <= self._mtime:
+            return
+        self._mtime = mtime
+        try:
+            content = self._file_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        self.load_text(content)
+        self.app.notify(f"↺ {self._file_path.name} 已更新", timeout=2)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if not self._modified and self._file_path:

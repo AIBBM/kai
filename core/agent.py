@@ -4,6 +4,7 @@ import os
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -19,12 +20,14 @@ from rich.rule import Rule
 from rich.table import Table
 
 from .config import (
+    DEEPSEEK_API_KEY,
     GEMINI_API_KEY,
     HISTORY_FILE,
     HISTORY_KEEP,
     MAX_SEARCH_CHARS,
     MAX_TOOL_CALLS,
     NUM_CTX,
+    OLLAMA_STREAM_TIMEOUT,
     TEMPERATURE,
     TOP_K,
     TOP_P,
@@ -73,49 +76,68 @@ class Agent:
             if GEMINI_API_KEY
             else None
         )
-        self._reset_date()
+        self._deepseek: AsyncOpenAI | None = (
+            AsyncOpenAI(
+                api_key=DEEPSEEK_API_KEY,
+                base_url="https://api.deepseek.com",
+            )
+            if DEEPSEEK_API_KEY
+            else None
+        )
+        self._rebuild_system_prompt()
         self._load_history()
 
-    def _reset_date(self):
-        """把今天日期寫入 history[0]，跨日後呼叫可更新。"""
+    def _rebuild_system_prompt(self):
+        """重建 history[0] system message（日期、cwd、MCP context 每次都可能變）。"""
         now = datetime.now().strftime("%Y-%m-%d")
+        has_mcp = bool(self.mcp_client and self.mcp_client.tool_names)
+        cwd = os.getcwd()
+        notes_path = Path(cwd) / "AGENT_NOTES.md"
+        notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
         system_msg = {
             "role": "system",
             "content": (
                 f"目前時間是 {now}（台灣時區 UTC+8）。"
                 f"使用者的名字是 {USERNAME}。"
-                "這是系統提供的最新時間，絕對正確。"
-                "如果對話歷史中有舊的時間記錄，一律以此為準，不得引用歷史中的時間。"
+                "若對話歷史有舊的時間記錄一律作廢。"
                 + (
-                    "你有 web_search 工具可以查詢即時資訊。"
-                    "遇到任何你不確定的事實、日期、新聞、時事，直接呼叫 web_search，不要說『我要搜尋』或『請稍等』，直接呼叫工具。"
-                    "只有在確定自己知道答案時才直接回答，其他情況一律先搜尋再回答。"
+                    f"你是 {self.profile.name}，由 DeepSeek 開發的 AI 助手。你不是 Claude，不是 ChatGPT，也不是任何其他 AI。"
+                    if self.profile.backend == "deepseek"
+                    else ""
+                )
+                + (
+                    f"\n\n## 📝 專案記憶\n{notes}"
+                    "\n\n以上規則必須嚴格遵守。"
+                    if notes
+                    else ""
+                )
+                + (
+                    "遇到任何不確定的事實、日期、新聞、時事，必須直接呼叫 web_search 工具。"
+                    "**嚴禁說「我要搜尋」或「請稍等」，請直接呼叫工具。**"
+                    "只有在 100% 確定時才直接回答，其他情況一律先搜尋。"
                     if self.profile.supports_tools
                     else ""
                 )
-                # + "回覆時不要使用 --- 水平分隔線。"
                 + (
-                    f"\n\n你也有資料庫查詢工具可以存取台股資料。{self.mcp_context}"
-                    if self.mcp_context
-                    else ""
-                )
-                + (
-                    f"\n\n## MCP 工具"
-                    f"\n目前工作目錄：{os.getcwd()}。"
-                    "\n你已連接檔案系統與瀏覽器等 MCP 工具，請依據任務直接呼叫，工具清單已內建於系統，無需重複列舉。"
-                    "\n\n### 工具優先順序與限制（必須嚴格遵守）"
-                    "\n- 瀏覽器操作 → 只能使用 Playwright MCP 工具（browser_navigate / browser_click 等），嚴禁用 bash 執行 node / npx / playwright CLI。"
-                    "\n- 檔案讀寫 → 只能使用 FileSystem MCP 工具（read_file / write_file / list_directory 等），嚴禁用 bash 執行 cat / ls / cp。"
-                    "\n- 系統指令 → bash_exec 僅限 MCP 無法涵蓋的純系統操作（git、uv、ping 等）。"
-                    "\n- 環境安全 → 嚴禁用 bash 執行 npm install / npx / node，絕對禁止在專案目錄安裝任何 npm 套件。"
-                    f"\n- 檔案輸出 → 截圖、下載或建立新檔案時，請儲存於目前工作目錄（{os.getcwd()}），並於回覆中提供明確的絕對路徑。"
-                    "\n\n### 執行與排錯原則"
-                    "\n- 複雜任務請逐步完成：網頁操作需先確認頁面已載入，再進行點擊或截圖。"
-                    "\n- 嚴禁捏造：回答必須基於工具回傳的真實資料，工具失敗時誠實告知，不得編造結果。"
-                    "\n- 選擇器排錯：selector 找不到元素時，**必須立即呼叫 `browser_snapshot`（不要帶 filename 參數）**，閱讀回傳的頁面結構，再從中找正確的元素 ref 或描述，嚴禁用相同 selector 重複重試。"
-                    "\n- 截圖參數：`browser_take_screenshot` 的 `type` 參數只接受 `\"png\"` 或 `\"jpeg\"`，不需要時可省略；不可傳其他值。"
-                    "\n- 任務收尾：完成任務後，必須用文字清楚告知最終結果與狀態，不得無聲結束。"
-                    if self.mcp_client and self.mcp_client.tool_names
+                    "\n\n你已連接"
+                    + ("資料庫查詢工具（台股資料）、" if "可查詢的資料表" in self.mcp_context else "")
+                    + "檔案系統與瀏覽器等 MCP 工具。工具清單已內建，無需重複列舉。"
+                    f"\n\n## 📁 工作目錄與環境"
+                    f"\n- 目前工作目錄：{cwd}"
+                    + (f"\n- {self.mcp_context.strip()}" if self.mcp_context else "")
+                    + "\n\n## 🚫 工具優先順序與嚴格限制（違反將導致任務失敗）"
+                    "\n1. 瀏覽器操作：僅限使用 Playwright MCP 工具（如 browser_navigate, browser_click）。嚴禁用 bash 執行 node / npx / playwright CLI。"
+                    "\n2. 檔案讀寫：僅限使用 FileSystem MCP 工具（如 read_file, write_file, list_directory）。嚴禁用 bash 執行 cat / ls / cp。"
+                    "\n3. 系統指令：bash_exec 僅限用於 MCP 無法涵蓋的純系統操作（如 git, uv, ping）。"
+                    "\n4. 環境安全：**絕對禁止**用 bash 執行 npm install / npx / node，嚴禁在專案目錄安裝任何 npm 套件。"
+                    f"\n5. 檔案輸出：截圖、下載或建立新檔案時，必須儲存於「目前工作目錄」（{cwd}），並於回覆中提供明確的絕對路徑。"
+                    "\n\n## 🛠️ 執行與排錯 SOP"
+                    "\n- 逐步執行：複雜任務請分步進行。網頁操作需確認目標元素已存在於頁面結構中，再進行點擊或截圖。"
+                    "\n- 嚴禁盲目重試：當 browser 操作因 selector 找不到元素失敗時，**嚴禁用相同 selector 重試**。必須立即呼叫 `browser_snapshot`（不帶 filename 參數），讀取回傳的頁面結構，找出正確的 ref 或描述後再繼續。"
+                    "\n- 參數限制：`browser_take_screenshot` 的 `type` 參數僅接受 \"png\" 或 \"jpeg\"，不需要時請省略。"
+                    "\n- 嚴禁捏造：回答必須基於工具回傳的真實資料，工具失敗時誠實告知。"
+                    "\n- 任務收尾：完成任務後，必須用文字清楚總結最終結果與狀態，不得無聲結束對話。"
+                    if has_mcp
                     else ""
                 )
             ),
@@ -169,7 +191,7 @@ class Agent:
     def reset_history(self):
         """切換工作目錄後清空並重新載入新 cwd 的 history.json。"""
         self.history = []
-        self._reset_date()
+        self._rebuild_system_prompt()
         self._load_history()
 
     def save_history(self):
@@ -188,8 +210,9 @@ class Agent:
 
     async def compact_history(self) -> str:
         """用 gemini-2.0-flash 摘要現有 history，壓縮 context。回傳摘要文字。"""
-        if not self._gemini:
-            raise RuntimeError("需要 GEMINI_API_KEY 才能使用 compact")
+        _compact_client = self._gemini or self._deepseek
+        if not _compact_client:
+            raise RuntimeError("需要 GEMINI_API_KEY 或 DEEPSEEK_API_KEY 才能使用 compact")
 
         parts = []
         for msg in self.history:
@@ -218,8 +241,9 @@ class Agent:
             f"對話歷史：\n\n{conversation}"
         )
 
-        resp = await self._gemini.chat.completions.create(
-            model="gemini-2.0-flash",
+        _compact_model = "deepseek-v4-flash" if not self._gemini and self._deepseek else "gemini-2.0-flash"
+        resp = await _compact_client.chat.completions.create(
+            model=_compact_model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
         )
@@ -321,7 +345,14 @@ class Agent:
 
             live: "Live | None" = None
             try:
-                async for chunk in stream:
+                _it = stream.__aiter__()
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(_it.__anext__(), timeout=OLLAMA_STREAM_TIMEOUT)
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        raise asyncio.TimeoutError(f"Ollama 超過 {OLLAMA_STREAM_TIMEOUT}s 未回應，可能已卡住")
                     if self._cancelled:
                         break
                     msg = chunk.message
@@ -364,14 +395,21 @@ class Agent:
                     continue
                 raise
 
-    async def _stream_gemini(
-        self, messages, active_tools, reply_parts, tool_calls, thinking_parts,
+    async def _stream_openai_compat(
+        self, client: AsyncOpenAI, messages, active_tools, reply_parts, tool_calls, thinking_parts,
         on_token, on_thinking,
     ) -> "Live | None":
-        """Gemini 串流（OpenAI-compatible endpoint）。"""
+        """OpenAI-compatible 串流（Gemini / DeepSeek）。"""
         from openai import NOT_GIVEN, RateLimitError
+        is_deepseek = self.profile.backend == "deepseek"
+        extra: dict = {}
+        if is_deepseek and self.profile.supports_thinking:
+            extra["extra_body"] = {"thinking": {"type": "enabled"}}
+            extra["reasoning_effort"] = "high"
+        elif is_deepseek:
+            extra["extra_body"] = {"thinking": {"type": "disabled"}}
         try:
-            stream = await self._gemini.chat.completions.create(
+            stream = await client.chat.completions.create(
                 model=self.profile.name,
                 messages=messages,
                 tools=active_tools or NOT_GIVEN,
@@ -379,10 +417,11 @@ class Agent:
                 top_p=TOP_P,
                 stream=True,
                 stream_options={"include_usage": True},
+                **extra,
             )
         except RateLimitError as e:
-            logger.warning(f"Gemini 配額不足：{e}")
-            raise RuntimeError(f"❌ Gemini 配額已用盡，請稍後再試或升級至付費方案。\n{e}") from e
+            logger.warning(f"API 配額不足（{self.profile.backend}）：{e}")
+            raise RuntimeError(f"❌ API 配額已用盡，請稍後再試。\n{e}") from e
 
         _tc_buf: dict[int, dict] = {}
         live: "Live | None" = None
@@ -392,9 +431,24 @@ class Agent:
                 break
             if chunk.usage:
                 self._last_usage = (chunk.usage.completion_tokens, chunk.usage.prompt_tokens)
+                # prompt_cache_hit_tokens 只有 DeepSeek 會回傳，Gemini 沒有此欄位
+                hit = getattr(chunk.usage, "prompt_cache_hit_tokens", None)
+                if hit is None and getattr(chunk.usage, "model_extra", None):
+                    hit = chunk.usage.model_extra.get("prompt_cache_hit_tokens")
+                if hit is not None:
+                    self._last_cache_hit = hit
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
+
+            # DeepSeek 思考內容在 reasoning_content（非標準欄位）
+            reasoning = getattr(delta, "reasoning_content", None) or (
+                delta.model_extra.get("reasoning_content")
+                if getattr(delta, "model_extra", None)
+                else None
+            )
+            if reasoning:
+                thinking_parts.append(reasoning)
 
             if delta.content:
                 if not reply_parts:
@@ -443,7 +497,7 @@ class Agent:
             )
             return
 
-        self._reset_date()
+        self._rebuild_system_prompt()
         self.history.append(user_msg)
         messages = self._trim_history()
 
@@ -455,6 +509,7 @@ class Agent:
             active_tools.extend(self.mcp_client.tools)
 
         self._last_usage: tuple = (None, None)
+        self._last_cache_hit: int | None = None
         self._t_thinking_end: float | None = None
         tool_call_count = 0
         while True:
@@ -466,9 +521,10 @@ class Agent:
 
             live: "Live | None" = None
             try:
-                if self.profile.backend == "gemini":
-                    live = await self._stream_gemini(
-                        messages, active_tools, reply_parts, tool_calls, thinking_parts,
+                if self.profile.backend in ("gemini", "deepseek"):
+                    _client = self._gemini if self.profile.backend == "gemini" else self._deepseek
+                    live = await self._stream_openai_compat(
+                        _client, messages, active_tools, reply_parts, tool_calls, thinking_parts,
                         on_token, on_thinking,
                     )
                 else:
@@ -502,14 +558,17 @@ class Agent:
 
             t_total = time.perf_counter() - t_start
             usage = self._last_usage
+            _cache_str = ""
+            if self._last_cache_hit is not None and usage[1]:
+                _cache_str = f"，cache hit {self._last_cache_hit}/{usage[1]} ({self._last_cache_hit * 100 // usage[1]}%)"
             if self._t_thinking_end:
                 logger.debug(
                     f"思考 {self._t_thinking_end - t_start:.2f}s，總耗時 {t_total:.2f}s "
-                    f"| 生成 {usage[0]} tokens，輸入 {usage[1]} tokens"
+                    f"| 生成 {usage[0]} tokens，輸入 {usage[1]} tokens{_cache_str}"
                 )
             else:
                 logger.debug(
-                    f"總耗時 {t_total:.2f}s | 生成 {usage[0]} tokens，輸入 {usage[1]} tokens"
+                    f"總耗時 {t_total:.2f}s | 生成 {usage[0]} tokens，輸入 {usage[1]} tokens{_cache_str}"
                 )
 
             if not tool_calls:
@@ -521,9 +580,10 @@ class Agent:
                     if on_done:
                         await on_done(t_total, self._t_thinking_end and self._t_thinking_end - t_start, usage[0], usage[1])
                     return
-                self.history.append(
-                    {"role": "assistant", "content": "".join(reply_parts)}
-                )
+                assistant_msg: dict = {"role": "assistant", "content": "".join(reply_parts)}
+                if self.profile.backend == "deepseek" and thinking_parts:
+                    assistant_msg["reasoning_content"] = "".join(thinking_parts)
+                self.history.append(assistant_msg)
                 self._rotate_history()
                 self.save_history()
                 if on_done:
@@ -531,8 +591,8 @@ class Agent:
                 return
 
             # Build assistant message with tool calls (format differs by backend)
-            if self.profile.backend == "gemini":
-                messages.append({
+            if self.profile.backend in ("gemini", "deepseek"):
+                _asst: dict = {
                     "role": "assistant",
                     "content": "".join(reply_parts) or None,
                     "tool_calls": [
@@ -548,7 +608,10 @@ class Agent:
                         }
                         for tc in tool_calls
                     ],
-                })
+                }
+                if self.profile.backend == "deepseek" and thinking_parts:
+                    _asst["reasoning_content"] = "".join(thinking_parts)
+                messages.append(_asst)
             else:
                 messages.append({
                     "role": "assistant",
@@ -566,6 +629,12 @@ class Agent:
                     ]
                 )
 
+            if self._cancelled:
+                self._cancelled = False
+                if self.history and self.history[-1]["role"] == "user":
+                    self.history.pop()
+                return
+
             if on_tool_call:
                 for tc, (fn_name, result) in zip(tool_calls, results):
                     raw = getattr(tc.function, "arguments", {})
@@ -580,7 +649,7 @@ class Agent:
                     self._render_mcp_result(fn_name, result)
 
             # Tool result messages (format differs by backend)
-            if self.profile.backend == "gemini":
+            if self.profile.backend in ("gemini", "deepseek"):
                 for tc, (fn_name, result) in zip(tool_calls, results):
                     messages.append({
                         "role": "tool",
