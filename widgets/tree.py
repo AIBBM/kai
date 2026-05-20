@@ -2,18 +2,69 @@
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from pathlib import Path
 
 from textual import events
 from textual.app import ComposeResult
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import OptionList, Tree
+from textual.widgets import Button, Label, OptionList, Tree
 from textual.widgets._tree import TreeNode
 
 from .utils import _HIDDEN_DIRS, _copy_to_clipboard, _file_icon
+
+
+class ConfirmDeleteScreen(ModalScreen[bool]):
+    """刪除確認對話框。"""
+
+    DEFAULT_CSS = """
+    ConfirmDeleteScreen {
+        align: center middle;
+    }
+    ConfirmDeleteScreen Vertical {
+        width: 50;
+        height: auto;
+        padding: 1 2;
+        border: round $error;
+        background: $surface;
+    }
+    ConfirmDeleteScreen Label {
+        width: 100%;
+        text-align: center;
+        margin-bottom: 1;
+    }
+    ConfirmDeleteScreen Horizontal {
+        width: 100%;
+        height: auto;
+        align: center middle;
+    }
+    ConfirmDeleteScreen Button {
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self._path = path
+
+    def compose(self) -> ComposeResult:
+        kind = "資料夾" if self._path.is_dir() else "檔案"
+        with Vertical():
+            yield Label(f"刪除{kind}？")
+            yield Label(self._path.name, markup=False)
+            with Horizontal():
+                yield Button("刪除", id="confirm", variant="error")
+                yield Button("取消", id="cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#cancel").focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm")
 
 
 def _relative_display(path: Path) -> str:
@@ -73,6 +124,9 @@ class TreeContextMenu(ModalScreen):
     }
     """
 
+    _OPT_COPY = 0
+    _OPT_DELETE = 1
+
     def __init__(self, path: Path | None, sx: int, sy: int) -> None:
         super().__init__()
         self._path = path
@@ -80,21 +134,41 @@ class TreeContextMenu(ModalScreen):
         self._sy = sy
 
     def compose(self) -> ComposeResult:
-        yield OptionList("複製檔名", id="ctx-options")
+        yield OptionList("複製檔名", "刪除", id="ctx-options")
 
     def on_mount(self) -> None:
         ol = self.query_one(OptionList)
         x = min(self._sx + 6, self.app.size.width - 24)
-        y = min(self._sy, self.app.size.height - 6)
+        y = min(self._sy, self.app.size.height - 8)
         ol.styles.offset = (x, y)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if self._path and event.option_index == 0:
+        if not self._path:
+            self.dismiss()
+            return
+        if event.option_index == self._OPT_COPY:
             path = self._path
             app = self.app
             app.notify(f"已複製：{_relative_display(path)}", timeout=1.5)
             self.dismiss()
             app.run_worker(lambda: _copy_filename_bg(app, path), thread=True)
+        elif event.option_index == self._OPT_DELETE:
+            path = self._path
+            app = self.app
+            self.dismiss()
+            def _after_confirm(confirmed: bool | None) -> None:
+                if not confirmed:
+                    return
+                try:
+                    if path.is_dir():
+                        shutil.rmtree(path)
+                    else:
+                        path.unlink()
+                    app.query_one("FileTree").refresh_tree()  # type: ignore[union-attr]
+                    app.notify(f"已刪除：{path.name}", timeout=2)
+                except Exception as e:
+                    app.notify(f"刪除失敗：{e}", severity="error")
+            app.push_screen(ConfirmDeleteScreen(path), _after_confirm)
         else:
             self.dismiss()
 
