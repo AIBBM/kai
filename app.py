@@ -660,14 +660,19 @@ class ChatApp(App[None]):
         await self.query_one("#messages", VerticalScroll).remove_children()
 
     async def action_clear(self) -> None:
+        real_msgs = [m for m in self.agent.history if m.get("role") != "system"]
+        if not real_msgs:
+            self.notify("沒有對話記錄，無需清除", severity="information", timeout=2)
+            return
         await self.query_one("#messages", VerticalScroll).remove_children()
         hist_file = Path(os.getcwd()) / "history.json"
-        if hist_file.exists() and self.agent.history:
+        if hist_file.exists():
             from datetime import datetime
+            hist_dir = Path(os.getcwd()) / ".history"
+            hist_dir.mkdir(exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            archive = hist_file.parent / f"history_{ts}.json"
-            hist_file.rename(archive)
-            self.notify(f"歷史已歸檔：{archive.name}", timeout=3)
+            hist_file.rename(hist_dir / f"history_{ts}.json")
+            self.notify(f"歷史已歸檔至 .history/history_{ts}.json", timeout=3)
         self.agent.history = []
         self.agent._rebuild_system_prompt()
         self.agent.save_history()
@@ -676,7 +681,8 @@ class ChatApp(App[None]):
     async def _handle_resume(self, arg: str) -> None:
         import json as _json
         cwd = Path(os.getcwd())
-        archives = sorted(cwd.glob("history_*.json"), reverse=True)
+        hist_dir = cwd / ".history"
+        archives = sorted(hist_dir.glob("history_*.json"), reverse=True) if hist_dir.exists() else []
         if not archives:
             self.notify("沒有任何歸檔 session", severity="warning")
             return
@@ -703,7 +709,8 @@ class ChatApp(App[None]):
             self.notify(f"編號無效，共 {len(archives)} 個歸檔", severity="error")
             return
         try:
-            archive.replace(cwd / "history.json")
+            import shutil
+            shutil.copy2(archive, cwd / "history.json")
         except Exception as e:
             self.notify(f"載入失敗：{e}", severity="error")
             return
