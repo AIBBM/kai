@@ -1123,4 +1123,14 @@ class ChatApp(App[None]):
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="kai — terminal AI agent TUI")
+    parser.add_argument("directory", nargs="?", help="啟動目錄（預設為當前目錄）")
+    args = parser.parse_args()
+    if args.directory:
+        target = Path(args.directory).expanduser().resolve()
+        if not target.is_dir():
+            print(f"錯誤：{target} 不是有效的目錄")
+            raise SystemExit(1)
+        os.chdir(target)
     ChatApp().run()
