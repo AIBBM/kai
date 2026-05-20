@@ -16,6 +16,9 @@ history.json
 .aider*
 images/
 
+# RepoMapper cache
+.repomap.tags.cache.v1/
+
 # Runtime artifacts
 *.log
 *.png
