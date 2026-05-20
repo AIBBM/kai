@@ -189,6 +189,7 @@ class ChatApp(App[None]):
         self._render_history()
         self.__class__.SLASH_COMMANDS = [
             ("/clear", "清除畫面"),
+            ("/ask", "臨時提問，不污染對話歷史  /ask <問題>"),
             ("/cls", "清除記憶並歸檔（可 /resume 恢復）"),
             ("/resume", "列出歸檔 session  /resume [編號]"),
             ("/remember", "記住規則  /remember <內容>"),
@@ -376,7 +377,12 @@ class ChatApp(App[None]):
             parts = text.split(maxsplit=1)
             cmd = parts[0].lower()
             arg = parts[1].strip() if len(parts) > 1 else ""
-            if cmd == "/clear":
+            if cmd == "/ask":
+                if not arg:
+                    self.notify("用法：/ask <問題>", severity="warning")
+                else:
+                    self._send(arg, ephemeral=True)
+            elif cmd == "/clear":
                 await self.action_clear_screen()
             elif cmd == "/cls":
                 await self.action_clear()
@@ -761,14 +767,16 @@ class ChatApp(App[None]):
     # ── Streaming worker ──────────────────────────────────────────────────────
 
     @work(exclusive=True)
-    async def _send(self, text: str, images: list[str] | None = None) -> None:
+    async def _send(self, text: str, images: list[str] | None = None, ephemeral: bool = False) -> None:
         msgs = self.query_one("#messages", VerticalScroll)
         prompt = self.query_one("#prompt", HistoryInput)
         stream_msg: AIMessage | None = None
         buf: list[str] = []
 
         self.agent._cancelled = False
-        self._resumed_from = None  # 有新訊息，解除 resume 保護
+        if not ephemeral:
+            self._resumed_from = None  # 有新訊息，解除 resume 保護
+        _history_snapshot = [m.copy() for m in self.agent.history] if ephemeral else None
         self._spin_idx = 0
         self._spin_label = "等待回覆"
 
@@ -984,6 +992,9 @@ class ChatApp(App[None]):
             prompt.disabled = False
             prompt.placeholder = f"傳訊息給 {self.agent.profile.name}..."
             prompt.focus()
+            if ephemeral and _history_snapshot is not None:
+                self.agent.history = _history_snapshot
+                self.agent.save_history()
 
     # ── Bash 直接執行 ─────────────────────────────────────────────────────────
 
