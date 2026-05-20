@@ -1,4 +1,4 @@
-"""Textual TUI for qwen-agent.  Run: uv run python app.py"""
+"""Textual TUI for kai.  Run: uv run python app.py"""
 from __future__ import annotations
 
 import asyncio
@@ -188,7 +188,7 @@ class ChatApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.title = "qwen-agent"
+        self.title = "kai"
         self.sub_title = MODEL
         self.query_one("#prompt", HistoryInput).focus()
         self._update_prompt_title()

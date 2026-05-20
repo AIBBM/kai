@@ -1,7 +1,7 @@
 [project]
-name = "qwen-agent"
+name = "kai"
 version = "0.1.0"
-description = "Add your description here"
+description = "Terminal AI agent TUI — Ollama / Gemini / MCP, built with Textual"
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28.1",
