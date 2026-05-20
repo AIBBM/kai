@@ -390,6 +390,7 @@ class ChatApp(App[None]):
                         _f.write(f"\n- {arg}")
                     self.agent._rebuild_system_prompt()
                     self.notify("✅ 已記錄到 AGENT_NOTES.md", severity="information")
+                    self.query_one("#file-tree", FileTree).refresh_tree()
             elif cmd == "/compact":
                 await self.action_compact()
             elif cmd == "/model" and arg:
@@ -677,6 +678,7 @@ class ChatApp(App[None]):
         self.agent._rebuild_system_prompt()
         self.agent.save_history()
         self.sub_title = self.agent.profile.name
+        self.query_one("#file-tree", FileTree).refresh_tree()
 
     async def _handle_resume(self, arg: str) -> None:
         import json as _json
@@ -839,6 +841,7 @@ class ChatApp(App[None]):
                 await msgs.mount(Static(stats, classes="stats", markup=False))
                 self.sub_title = f"{self.agent.profile.name} · {stats}"
                 self.query_one("#sidebar", Sidebar).refresh_git()
+                self.query_one("#file-tree", FileTree).refresh_tree()
                 if at_bot:
                     msgs.scroll_end(animate=False)
 
