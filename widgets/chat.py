@@ -145,6 +145,7 @@ class FileViewer(TextArea):
             return
         try:
             self._file_path.write_text(self.text, encoding="utf-8")
+            self._mtime = self._file_path.stat().st_mtime
             self._modified = False
             self._set_tab_title(modified=False)
             self.app.notify(f"已儲存 {self._file_path.name}", timeout=1.5)
