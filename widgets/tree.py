@@ -156,19 +156,28 @@ class TreeContextMenu(ModalScreen):
             path = self._path
             app = self.app
             self.dismiss()
-            def _after_confirm(confirmed: bool | None) -> None:
-                if not confirmed:
-                    return
-                try:
-                    if path.is_dir():
-                        shutil.rmtree(path)
-                    else:
-                        path.unlink()
-                    app.query_one("FileTree").refresh_tree()  # type: ignore[union-attr]
+
+            def _push_confirm() -> None:
+                def _after_confirm(confirmed: bool | None) -> None:
+                    if not confirmed:
+                        return
+                    try:
+                        if path.is_dir():
+                            shutil.rmtree(path)
+                        else:
+                            path.unlink()
+                    except Exception as e:
+                        app.notify(f"刪除失敗：{e}", severity="error")
+                        return
+                    try:
+                        app.query_one(FileTree).refresh_tree()
+                    except Exception:
+                        pass
                     app.notify(f"已刪除：{path.name}", timeout=2)
-                except Exception as e:
-                    app.notify(f"刪除失敗：{e}", severity="error")
-            app.push_screen(ConfirmDeleteScreen(path), _after_confirm)
+
+                app.push_screen(ConfirmDeleteScreen(path), _after_confirm)
+
+            app.call_after_refresh(_push_confirm)
         else:
             self.dismiss()
 
