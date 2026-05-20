@@ -157,27 +157,27 @@ class TreeContextMenu(ModalScreen):
             app = self.app
             self.dismiss()
 
-            def _push_confirm() -> None:
-                def _after_confirm(confirmed: bool | None) -> None:
-                    if not confirmed:
-                        return
-                    try:
-                        if path.is_dir():
-                            shutil.rmtree(path)
-                        else:
-                            path.unlink()
-                    except Exception as e:
-                        app.notify(f"刪除失敗：{e}", severity="error")
-                        return
-                    try:
-                        app.query_one(FileTree).refresh_tree()
-                    except Exception:
-                        pass
-                    app.notify(f"已刪除：{path.name}", timeout=2)
+            async def _do_delete() -> None:
+                confirmed = await app.push_screen(
+                    ConfirmDeleteScreen(path), wait_for_dismiss=True
+                )
+                if not confirmed:
+                    return
+                try:
+                    if path.is_dir():
+                        shutil.rmtree(path)
+                    else:
+                        path.unlink()
+                except Exception as e:
+                    app.notify(f"刪除失敗：{e}", severity="error")
+                    return
+                try:
+                    app.query_one(FileTree).refresh_tree()
+                except Exception:
+                    pass
+                app.notify(f"已刪除：{path.name}", timeout=2)
 
-                app.push_screen(ConfirmDeleteScreen(path), _after_confirm)
-
-            app.call_after_refresh(_push_confirm)
+            app.call_after_refresh(lambda: app.run_worker(_do_delete()))
         else:
             self.dismiss()
 
