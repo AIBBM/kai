@@ -45,6 +45,7 @@ logger.add(
     "agent_tui.log",
     level="DEBUG",
     rotation="5 MB",
+    retention=3,
     format="{time:HH:mm:ss} | {level:<5} | {message}",
 )
 
@@ -896,15 +897,17 @@ class ChatApp(App[None]):
                     "[Error]",
                     "[ValidationError]",
                     "[stderr]",
-                    "[exit code",
                     "Traceback (most recent call last)",
                 )
-                is_err = any(kw in result for kw in _ERR_PREFIXES)
+                _exit_m = __import__("re").search(r"\[exit code (\d+)\]", result)
+                _exit_code = int(_exit_m.group(1)) if _exit_m else 0
+                is_err = _exit_code >= 2 or any(kw in result for kw in _ERR_PREFIXES)
+                is_warn = not is_err and _exit_code == 1
                 # 檔案系統變更工具：成功時刷新檔案樹
                 _FS_MUTATING = {"write_file", "create_directory", "move_file", "delete_file", "edit_file"}
-                if not is_err and name in _FS_MUTATING:
+                if not is_err and not is_warn and name in _FS_MUTATING:
                     self.query_one("#file-tree", FileTree).refresh_tree()
-                icon = "❌" if is_err else "🔧"
+                icon = "❌" if is_err else ("⚠️" if is_warn else "🔧")
                 card_class = "tool-debug tool-debug-error" if is_err else "tool-debug"
                 if not self._debug_tools:
                     if is_err:

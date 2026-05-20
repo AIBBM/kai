@@ -43,8 +43,10 @@ class HistoryInput(Input):
         preview = lines[0][:40] + ("…" if len(lines[0]) > 40 else "")
         marker = f"[{len(lines)} 行] {preview}"
         self._multiline_marker = marker
-        self.value = marker
-        self.cursor_position = len(self.value)
+        before = self.value[: self.cursor_position]
+        after = self.value[self.cursor_position :]
+        self.value = before + marker + after
+        self.cursor_position = len(before) + len(marker)
 
     def _on_key(self, event: events.Key) -> None:
         if event.key == "up":
