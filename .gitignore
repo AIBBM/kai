@@ -16,6 +16,10 @@ history.json
 .aider*
 images/
 
+# Claude Code local settings
+.claude/settings.json
+.claude/settings.local.json
+
 # Tool caches
 .repomap.tags.cache.v1/
 .ruff_cache/
