@@ -205,6 +205,10 @@ class ChatApp(App[None]):
             ("/debug", "切換工具除錯模式（顯示工具參數與回應）"),
             ("/think", "切換 Thinking 模式開／關"),
             ("/cd", "切換工作目錄  /cd <路徑>"),
+            ("/mcp-list", "列出所有 MCP server 與工具說明"),
+            ("/mcp-reload", "重新載入 MCP servers（不需重啟）"),
+            ("/mcp-add", "新增 stdio MCP server  /mcp-add <name> <command> [args...]"),
+            ("/mcp-del", "移除 MCP server  /mcp-del <name>"),
         ] + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
         self._sync_cap_bar()
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
@@ -286,6 +290,87 @@ class ChatApp(App[None]):
         finally:
             self.agent.mcp_client = None
             await mcp.stop()
+
+    async def _do_mcp_list(self) -> None:
+        """顯示所有已連線 MCP server 與工具說明。"""
+        mcp = self.agent.mcp_client
+        msgs = self.query_one("#messages", VerticalScroll)
+        if not mcp or not mcp.tool_names:
+            await msgs.mount(Static("🔧 目前沒有連線中的 MCP server", markup=False, classes="bash-output"))
+            msgs.scroll_end(animate=False)
+            return
+        lines = []
+        for server, tools in mcp.tools_by_server.items():
+            lines.append(f"### {server}  ({len(tools)} 個工具)")
+            for t in tools:
+                desc = f" — {t['description']}" if t["description"] else ""
+                lines.append(f"- **{t['name']}**{desc}")
+            lines.append("")
+        body = "\n".join(lines).strip()
+        from textual.widgets import Markdown
+        await msgs.mount(Markdown(body))
+        msgs.scroll_end(animate=False)
+
+    async def _do_mcp_reload(self) -> None:
+        """停止現有 MCP lifecycle，重新啟動。"""
+        self.notify("🔄 重新連線 MCP...", severity="information")
+        if self._mcp_done:
+            self._mcp_done.set()
+        if self._mcp_task and not self._mcp_task.done():
+            try:
+                await asyncio.wait_for(self._mcp_task, timeout=3.0)
+            except BaseException:
+                self._mcp_task.cancel()
+        self._mcp_done = asyncio.Event()
+        self._mcp_task = asyncio.get_event_loop().create_task(self._mcp_lifecycle())
+        self.notify("✅ MCP 重新載入完成", severity="information")
+
+    async def _do_mcp_add(self, arg: str) -> None:
+        """新增 stdio MCP server：/mcp-add <name> <command> [args...]"""
+        if not arg:
+            self.notify("用法：/mcp-add <name> <command> [args...]", severity="warning")
+            return
+        parts = arg.split()
+        if len(parts) < 2:
+            self.notify("用法：/mcp-add <name> <command> [args...]", severity="warning")
+            return
+        name, command, *extra_args = parts
+        from core.config import MCP_SERVERS_FILE
+        data = {}
+        if MCP_SERVERS_FILE.exists():
+            try:
+                data = json.loads(MCP_SERVERS_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        data.setdefault("mcpServers", {})[name] = {
+            "command": command,
+            "args": extra_args,
+        }
+        MCP_SERVERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.notify(f"✅ 已新增 {name}，執行 /mcp-reload 生效", severity="information")
+
+    async def _do_mcp_del(self, arg: str) -> None:
+        """移除 MCP server：/mcp-del <name>"""
+        if not arg:
+            self.notify("用法：/mcp-del <name>", severity="warning")
+            return
+        name = arg.strip()
+        from core.config import MCP_SERVERS_FILE
+        if not MCP_SERVERS_FILE.exists():
+            self.notify("mcp_servers.json 不存在", severity="error")
+            return
+        try:
+            data = json.loads(MCP_SERVERS_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            self.notify(f"讀取失敗：{e}", severity="error")
+            return
+        servers = data.get("mcpServers", {})
+        if name not in servers:
+            self.notify(f"找不到 server：{name}", severity="error")
+            return
+        del servers[name]
+        MCP_SERVERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.notify(f"✅ 已移除 {name}，執行 /mcp-reload 生效", severity="information")
 
     async def action_quit(self) -> None:
         if self._mcp_done:
@@ -434,6 +519,14 @@ class ChatApp(App[None]):
                         self.notify(f"切換失敗：{e}", severity="error")
                 else:
                     self.notify(f"目前目錄：{os.getcwd()}", severity="information")
+            elif cmd == "/mcp-list":
+                await self._do_mcp_list()
+            elif cmd == "/mcp-reload":
+                await self._do_mcp_reload()
+            elif cmd == "/mcp-add":
+                await self._do_mcp_add(arg)
+            elif cmd == "/mcp-del":
+                await self._do_mcp_del(arg)
             elif cmd == "/image":
                 if not arg:
                     self.notify("用法：/image <圖片路徑> [問題]", severity="warning")

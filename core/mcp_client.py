@@ -23,16 +23,29 @@ class MCPClient:
         self._servers = servers
         self._sessions: dict[str, ClientSession] = {}
         self._tool_to_server: dict[str, str] = {}
-        self._ollama_tools: list[dict] = []
+        self._tool_schemas: list[dict] = []
         self._stack = AsyncExitStack()
 
     @property
     def tools(self) -> list[dict]:
-        return self._ollama_tools
+        return self._tool_schemas  # function calling schema，與後端無關
 
     @property
     def tool_names(self) -> set[str]:
         return set(self._tool_to_server)
+
+    @property
+    def tools_by_server(self) -> dict[str, list[dict]]:
+        """回傳 {server_name: [{name, description}, ...]}，供 /mcp-list 顯示。"""
+        result: dict[str, list[dict]] = {}
+        for tool in self._tool_schemas:
+            fn = tool["function"]
+            server = self._tool_to_server.get(fn["name"], "unknown")
+            result.setdefault(server, []).append({
+                "name": fn["name"],
+                "description": fn.get("description", ""),
+            })
+        return result
 
     @property
     def server_summary(self) -> dict[str, int]:
@@ -82,7 +95,7 @@ class MCPClient:
                 tools_result = await session.list_tools()
                 for tool in tools_result.tools:
                     self._tool_to_server[tool.name] = server_name
-                    self._ollama_tools.append({
+                    self._tool_schemas.append({
                         "type": "function",
                         "function": {
                             "name": tool.name,
