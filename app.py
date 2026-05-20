@@ -188,7 +188,8 @@ class ChatApp(App[None]):
         self._render_history()
         self.__class__.SLASH_COMMANDS = [
             ("/clear", "清除畫面"),
-            ("/cls", "清除記憶（畫面 + 對話歷史）"),
+            ("/cls", "清除記憶並歸檔（可 /resume 恢復）"),
+            ("/resume", "列出歸檔 session  /resume [編號]"),
             ("/remember", "記住規則  /remember <內容>"),
             ("/compact", "用 Gemini 壓縮對話歷史（釋放 context）"),
             ("/image", "傳送圖片給模型  /image <路徑> [問題]"),
@@ -378,6 +379,8 @@ class ChatApp(App[None]):
                 await self.action_clear_screen()
             elif cmd == "/cls":
                 await self.action_clear()
+            elif cmd == "/resume":
+                await self._handle_resume(arg)
             elif cmd == "/remember":
                 if not arg:
                     self.notify("用法：/remember <要記住的內容>", severity="warning")
@@ -658,10 +661,56 @@ class ChatApp(App[None]):
 
     async def action_clear(self) -> None:
         await self.query_one("#messages", VerticalScroll).remove_children()
+        hist_file = Path(os.getcwd()) / "history.json"
+        if hist_file.exists() and self.agent.history:
+            from datetime import datetime
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive = hist_file.parent / f"history_{ts}.json"
+            hist_file.rename(archive)
+            self.notify(f"歷史已歸檔：{archive.name}", timeout=3)
         self.agent.history = []
         self.agent._rebuild_system_prompt()
         self.agent.save_history()
         self.sub_title = self.agent.profile.name
+
+    async def _handle_resume(self, arg: str) -> None:
+        import json as _json
+        cwd = Path(os.getcwd())
+        archives = sorted(cwd.glob("history_*.json"), reverse=True)
+        if not archives:
+            self.notify("沒有任何歸檔 session", severity="warning")
+            return
+        if not arg:
+            lines = []
+            for i, p in enumerate(archives, 1):
+                try:
+                    msgs = _json.loads(p.read_text(encoding="utf-8"))
+                    first = next((m["content"] for m in msgs if m.get("role") == "user"), "")
+                    if isinstance(first, list):
+                        first = next((b["text"] for b in first if b.get("type") == "text"), "")
+                    preview = first[:60].replace("\n", " ")
+                except Exception:
+                    preview = "(無法讀取)"
+                lines.append(f"[{i}] {p.name}  {preview}")
+            msgs_area = self.query_one("#messages", VerticalScroll)
+            await msgs_area.mount(Static("\n".join(lines)))
+            self.notify("/resume <編號> 載入對應 session", timeout=5)
+            return
+        try:
+            idx = int(arg) - 1
+            archive = archives[idx]
+        except (ValueError, IndexError):
+            self.notify(f"編號無效，共 {len(archives)} 個歸檔", severity="error")
+            return
+        try:
+            archive.replace(cwd / "history.json")
+        except Exception as e:
+            self.notify(f"載入失敗：{e}", severity="error")
+            return
+        await self.query_one("#messages", VerticalScroll).remove_children()
+        self.agent.reset_history()
+        await self._render_history()
+        self.notify(f"已載入：{archive.name}", timeout=3)
 
     async def action_switch_model(self, model_name: str) -> None:
         if model_name not in REGISTRY:

@@ -12,6 +12,7 @@ wheels/
 # Secrets & local state
 .env
 history.json
+history_*.json
 .prompt_history
 .aider*
 images/
