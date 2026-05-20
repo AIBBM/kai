@@ -693,13 +693,22 @@ class ChatApp(App[None]):
             for i, p in enumerate(archives, 1):
                 try:
                     msgs = _json.loads(p.read_text(encoding="utf-8"))
-                    first = next((m["content"] for m in msgs if m.get("role") == "user"), "")
+                    user_msgs = [m for m in msgs if m.get("role") == "user"]
+                    count = len(user_msgs)
+                    first = user_msgs[0]["content"] if user_msgs else ""
                     if isinstance(first, list):
                         first = next((b["text"] for b in first if b.get("type") == "text"), "")
-                    preview = first[:60].replace("\n", " ")
+                    preview = str(first)[:50].replace("\n", " ")
+                    # 從檔名解析時間 history_YYYYMMDD_HHMMSS.json
+                    stem = p.stem  # history_20260520_153022
+                    try:
+                        dt = stem[8:]  # 20260520_153022
+                        ts_display = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} {dt[9:11]}:{dt[11:13]}:{dt[13:15]}"
+                    except Exception:
+                        ts_display = stem
                 except Exception:
-                    preview = "(無法讀取)"
-                lines.append(f"[{i}] {p.name}  {preview}")
+                    count, preview, ts_display = 0, "(無法讀取)", p.name
+                lines.append(f"[{i}] {ts_display}  {count} 則對話  {preview}…")
             msgs_area = self.query_one("#messages", VerticalScroll)
             await msgs_area.mount(Static("\n".join(lines)))
             self.notify("/resume <編號> 載入對應 session", timeout=5)
@@ -716,9 +725,9 @@ class ChatApp(App[None]):
         except Exception as e:
             self.notify(f"載入失敗：{e}", severity="error")
             return
-        await self.query_one("#messages", VerticalScroll).remove_children()
+        self.query_one("#messages", VerticalScroll).remove_children()
         self.agent.reset_history()
-        await self._render_history()
+        self._render_history()
         self.notify(f"已載入：{archive.name}", timeout=3)
 
     async def action_switch_model(self, model_name: str) -> None:
