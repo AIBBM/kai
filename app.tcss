@@ -4,7 +4,11 @@ Screen {
 }
 
 * {
-    scrollbar-size: 1 1;
+    scrollbar-size: 0 1;
+    scrollbar-background: transparent;
+    scrollbar-color: $panel;
+    scrollbar-color-hover: $panel-lighten-2;
+    scrollbar-color-active: $primary;
 }
 
 #app-grid {
@@ -37,7 +41,6 @@ Screen {
 #file-tree {
     width: 28;
     background: $surface;
-    border-right: tall $panel;
     overflow-y: auto;
 }
 
@@ -49,22 +52,21 @@ Screen {
 /* ─── 拖拉分隔條 ─── */
 ResizeHandle {
     width: 1;
-    background: $panel;
+    background: $surface-lighten-1;
 }
 
 ResizeHandle:hover {
-    background: $primary-darken-1;
+    background: $panel-lighten-2;
 }
 
 ResizeHandle.dragging {
-    background: $accent;
+    background: $primary;
 }
 
 /* ─── 側邊欄 ─── */
 #sidebar {
     width: 26;
     background: $surface;
-    border-left: tall $panel;
     padding: 0 1 1 1;
     overflow-y: auto;
 }

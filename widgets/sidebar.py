@@ -13,15 +13,20 @@ from core.config import MODEL
 
 
 class ResizeHandle(Widget):
-    """拖拉分隔條，調整相鄰 widget 的寬度。"""
+    """拖拉分隔條，調整相鄰 widget 的寬度。
+
+    right_anchor=True 時目標在右側（sidebar），往左拖加寬。
+    """
 
     def __init__(
-        self, target_id: str, min_w: int = 10, max_w: int = 80, **kwargs
+        self, target_id: str, min_w: int = 10, max_w: int = 80,
+        right_anchor: bool = False, **kwargs
     ) -> None:
         super().__init__(**kwargs)
         self._target_id = target_id
         self._min_w = min_w
         self._max_w = max_w
+        self._right_anchor = right_anchor
         self._dragging = False
 
     def render(self) -> str:
@@ -43,7 +48,10 @@ class ResizeHandle(Widget):
         if not self._dragging:
             return
         target = self.app.query_one(f"#{self._target_id}")
-        new_w = max(self._min_w, min(self._max_w, event.screen_x - target.region.x))
+        if self._right_anchor:
+            new_w = max(self._min_w, min(self._max_w, target.region.right - event.screen_x))
+        else:
+            new_w = max(self._min_w, min(self._max_w, event.screen_x - target.region.x))
         target.styles.width = new_w
 
 

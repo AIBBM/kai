@@ -177,6 +177,7 @@ class ChatApp(App[None]):
                             id="welcome",
                             markup=True,
                         )
+            yield ResizeHandle("sidebar", id="sidebar-handle", right_anchor=True)
             yield Sidebar(id="sidebar")
         with Horizontal(id="input-row"):
             yield HistoryInput(placeholder=f"傳訊息給 {MODEL}...", id="prompt")
@@ -646,6 +647,7 @@ class ChatApp(App[None]):
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#sidebar", Sidebar)
         sidebar.display = not sidebar.display
+        self.query_one("#sidebar-handle", ResizeHandle).display = sidebar.display
 
     async def _do_cd(self, arg: str) -> None:
         """切換工作目錄：存舊 history → chdir → 重載新 history → 清 UI。"""
