@@ -152,6 +152,7 @@ class ChatApp(App[None]):
         self._last_file_copy: dict | None = None
         self._bash_proc: asyncio.subprocess.Process | None = None
         self._bash_worker: "Worker | None" = None  # type: ignore[name-defined]
+        self._resumed_from: Path | None = None  # /resume 載入的歸檔路徑，有新訊息後清除
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -667,13 +668,16 @@ class ChatApp(App[None]):
             return
         await self.query_one("#messages", VerticalScroll).remove_children()
         hist_file = Path(os.getcwd()) / "history.json"
-        if hist_file.exists():
+        if hist_file.exists() and self._resumed_from is None:
             from datetime import datetime
             hist_dir = Path(os.getcwd()) / ".history"
             hist_dir.mkdir(exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             hist_file.rename(hist_dir / f"history_{ts}.json")
             self.notify(f"歷史已歸檔至 .history/history_{ts}.json", timeout=3)
+        elif self._resumed_from is not None:
+            hist_file.unlink(missing_ok=True)
+            self.notify("已清除（resume 後未新增對話，不重複歸檔）", timeout=3)
         self.agent.history = []
         self.agent._rebuild_system_prompt()
         self.agent.save_history()
@@ -728,7 +732,8 @@ class ChatApp(App[None]):
         self.query_one("#messages", VerticalScroll).remove_children()
         self.agent.reset_history()
         self._render_history()
-        self.notify(f"已載入：{archive.name}", timeout=3)
+        self._resumed_from = archive
+        self.notify(f"已載入：{archive.name}（有新對話後才會重新歸檔）", timeout=4)
 
     async def action_switch_model(self, model_name: str) -> None:
         if model_name not in REGISTRY:
@@ -763,6 +768,7 @@ class ChatApp(App[None]):
         buf: list[str] = []
 
         self.agent._cancelled = False
+        self._resumed_from = None  # 有新訊息，解除 resume 保護
         self._spin_idx = 0
         self._spin_label = "等待回覆"
 
