@@ -982,7 +982,7 @@ class ChatApp(App[None]):
                 logger.debug(f"ghost text prediction: {repr(prediction)}")
                 if prediction:
                     prompt.focus()
-                    prompt._suggestion = prediction
+                    prompt.show_prediction(prediction)
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
                 nonlocal stream_msg, buf

@@ -22,6 +22,7 @@ class HistoryInput(Input):
         self._undo_stack: list[tuple[str, int]] = []
         self._multiline_paste: str | None = None
         self._multiline_marker: str | None = None
+        self._real_placeholder: str = ""  # saved when ghost text swaps placeholder
 
     def on_paste(self, event: events.Paste) -> None:
         text = event.text
@@ -48,13 +49,32 @@ class HistoryInput(Input):
         self.value = before + marker + after
         self.cursor_position = len(before) + len(marker)
 
+    def show_prediction(self, text: str) -> None:
+        """顯示 AI 預測 ghost text。input 空時用 placeholder swap，有內容時用 _suggestion。"""
+        self._suggestion = text
+        if not self.value:
+            if not self._real_placeholder:
+                self._real_placeholder = self.placeholder
+            self.placeholder = text
+
+    def watch_value(self, value: str) -> None:
+        super().watch_value(value)  # 父類會清掉 _suggestion
+        if value and self._real_placeholder:
+            self.placeholder = self._real_placeholder
+            self._real_placeholder = ""
+
     def _on_key(self, event: events.Key) -> None:
-        if event.key == "tab" and self._suggestion and not self.value:
-            self.value = self._suggestion
-            self.cursor_position = len(self.value)
-            event.prevent_default()
-            event.stop()
-            return
+        if event.key == "tab":
+            suggestion = self._suggestion
+            if suggestion and not self.value:
+                if self._real_placeholder:
+                    self.placeholder = self._real_placeholder
+                    self._real_placeholder = ""
+                self.value = suggestion
+                self.cursor_position = len(self.value)
+                event.prevent_default()
+                event.stop()
+                return
         if event.key == "up":
             event.prevent_default()
             event.stop()
