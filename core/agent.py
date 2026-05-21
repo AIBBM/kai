@@ -94,6 +94,7 @@ class Agent:
         has_mcp = bool(tool_names)
         has_playwright = bool(tool_names & {"browser_navigate", "browser_click", "browser_snapshot"})
         has_filesystem = bool(tool_names & {"read_file", "write_file", "list_directory"})
+        has_repomapper = bool(tool_names & {"repo_map", "search_identifiers"})
         cwd = os.getcwd()
         notes_path = Path(cwd) / "AGENT_NOTES.md"
         notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
@@ -155,6 +156,10 @@ class Agent:
                         ]
                     )
                     + "\n\n## 🛠️ 執行與排錯 SOP"
+                    + (
+                        f"\n- 程式碼探索：需要了解專案結構或函數定義時，**優先呼叫 `repo_map` 工具**（傳入 project_root=`{cwd}`）取得整體地圖；需定位特定函數或類別時用 `search_identifiers`。嚴禁用 bash cat 逐檔讀取來理解專案架構。"
+                        if has_repomapper else ""
+                    )
                     + (
                         "\n- 逐步執行：複雜任務請分步進行。網頁操作需確認目標元素已存在於頁面結構中，再進行點擊或截圖。"
                         "\n- 嚴禁盲目重試：當 browser 操作因 selector 找不到元素失敗時，**嚴禁用相同 selector 重試**。必須立即呼叫 `browser_snapshot`（不帶 filename 參數），讀取回傳的頁面結構，找出正確的 ref 或描述後再繼續。"
