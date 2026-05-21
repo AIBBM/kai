@@ -11,13 +11,6 @@ import httpx
 import ollama
 from openai import AsyncOpenAI
 from loguru import logger
-from rich import box
-from rich.live import Live
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.rule import Rule
-from rich.table import Table
 
 from .config import (
     DEEPSEEK_API_KEY,
@@ -54,7 +47,6 @@ except ImportError:
 class Agent:
     def __init__(self, model: str, history_file: "Path | None" = None, agent_dir: "Path | None" = None, system_prompt: str | None = None):
         self.profile: ModelProfile = get_profile(model)
-        self.console = Console()
         self.history: list[dict] = []
         # 工具對映表：新工具只需在這裡登記
         self.tools_map: dict = {
@@ -316,38 +308,6 @@ class Agent:
         rest = [m for m in self.history if m["role"] != "system"]
         return system + rest[-HISTORY_KEEP:]
 
-    def _render_thinking(self, content: str):
-        """將思考內容渲染成黃色 Panel。"""
-        if content.strip():
-            self.console.print(
-                Panel(
-                    content.strip(),
-                    title="[bold yellow]💡 思考中[/bold yellow]",
-                    subtitle=f"[dim]{self.profile.name}[/dim]",
-                    border_style="yellow",
-                    expand=False,
-                    padding=(0, 2),
-                )
-            )
-
-    def _render_search_table(self, results: list[tuple[str, str]]):
-        """將 web_search 結果摘要顯示為表格。"""
-        table = Table(
-            title="🔍 搜尋結果摘要",
-            box=box.SIMPLE_HEAD,
-            show_lines=False,
-            title_style="bold cyan",
-        )
-        table.add_column("#", style="dim", width=3)
-        table.add_column("標題", style="white", no_wrap=False)
-        n = 0
-        for _, content in results:
-            for line in content.split("\n"):
-                if line.startswith("["):
-                    n += 1
-                    table.add_row(str(n), line)
-        self.console.print(table)
-
     def _trim_tool_result(self, content: str) -> str:
         """HTML 去標簽；超長截斷。"""
         if re.search(r"<html|<!doctype", content[:200], re.IGNORECASE):
@@ -359,29 +319,11 @@ class Agent:
             )
         return content
 
-    def _render_mcp_result(self, tool_name: str, content: str):
-        """MCP tool 結果顯示為 Panel。"""
-        self.console.print(
-            Panel(
-                content[:MAX_SEARCH_CHARS]
-                + ("..." if len(content) > MAX_SEARCH_CHARS else ""),
-                title=f"[bold cyan]🔧 {tool_name}[/bold cyan]",
-                border_style="cyan",
-                expand=True,
-            )
-        )
-
-    def _start_live(self) -> "Live":
-        self.console.print(Rule("[bold green]🤖 AI[/bold green]", style="green"))
-        live = Live(Markdown(""), console=self.console, transient=True, refresh_per_second=7, vertical_overflow="crop")
-        live.start()
-        return live
-
     async def _stream_ollama(
         self, messages, active_tools, reply_parts, tool_calls, thinking_parts,
         on_token, on_thinking, on_retry,
-    ) -> "Live | None":
-        """Ollama 串流，含 XML 解析錯誤自動重試。回傳 Live（CLI 模式）或 None。"""
+    ) -> None:
+        """Ollama 串流，含 XML 解析錯誤自動重試。"""
         _xml_retry = 0
         _XML_RETRY_MAX = 2
         while True:
@@ -395,10 +337,8 @@ class Agent:
                     options={"num_ctx": self.profile.num_ctx, "temperature": TEMPERATURE, "top_k": TOP_K, "top_p": TOP_P},
                 )
             except httpx.ConnectError:
-                self.console.print("[bold red]❌ 無法連線 Ollama，請確認服務正常運行。[/bold red]")
                 raise
 
-            live: "Live | None" = None
             try:
                 _it = stream.__aiter__()
                 while True:
@@ -417,28 +357,19 @@ class Agent:
                         thinking_parts.append(clean_thinking(msg.thinking))
 
                     if msg.content:
-                        if not reply_parts:
-                            if thinking_parts:
-                                self._t_thinking_end = time.perf_counter()
-                                if on_thinking:
-                                    await on_thinking("".join(thinking_parts))
-                                else:
-                                    self._render_thinking("".join(thinking_parts))
-                            if not on_token:
-                                live = self._start_live()
+                        if not reply_parts and thinking_parts:
+                            self._t_thinking_end = time.perf_counter()
+                            if on_thinking:
+                                await on_thinking("".join(thinking_parts))
                         reply_parts.append(msg.content)
                         if on_token:
                             await on_token(msg.content)
-                        elif live:
-                            live.update(Markdown("".join(reply_parts)))
 
                     for tc in msg.tool_calls or []:
                         tool_calls.append(tc)
-                return live
+                return
 
             except ollama.ResponseError as e:
-                if live:
-                    live.stop()
                 if "XML syntax error" in str(e) and _xml_retry < _XML_RETRY_MAX:
                     _xml_retry += 1
                     logger.warning(f"XML 解析錯誤，第 {_xml_retry}/{_XML_RETRY_MAX} 次重試：{e}")
@@ -453,7 +384,7 @@ class Agent:
     async def _stream_openai_compat(
         self, client: AsyncOpenAI, messages, active_tools, reply_parts, tool_calls, thinking_parts,
         on_token, on_thinking,
-    ) -> "Live | None":
+    ) -> None:
         """OpenAI-compatible 串流（Gemini / DeepSeek）。"""
         from openai import NOT_GIVEN, RateLimitError
         is_deepseek = self.profile.backend == "deepseek"
@@ -479,7 +410,6 @@ class Agent:
             raise RuntimeError(f"❌ API 配額已用盡，請稍後再試。\n{e}") from e
 
         _tc_buf: dict[int, dict] = {}
-        live: "Live | None" = None
 
         async for chunk in stream:
             if self._cancelled:
@@ -506,20 +436,13 @@ class Agent:
                 thinking_parts.append(reasoning)
 
             if delta.content:
-                if not reply_parts:
-                    if thinking_parts:
-                        self._t_thinking_end = time.perf_counter()
-                        if on_thinking:
-                            await on_thinking("".join(thinking_parts))
-                        else:
-                            self._render_thinking("".join(thinking_parts))
-                    if not on_token:
-                        live = self._start_live()
+                if not reply_parts and thinking_parts:
+                    self._t_thinking_end = time.perf_counter()
+                    if on_thinking:
+                        await on_thinking("".join(thinking_parts))
                 reply_parts.append(delta.content)
                 if on_token:
                     await on_token(delta.content)
-                elif live:
-                    live.update(Markdown("".join(reply_parts)))
 
             for tc_chunk in (delta.tool_calls or []):
                 i = tc_chunk.index
@@ -536,7 +459,6 @@ class Agent:
                 function=SimpleNamespace(name=d["name"], arguments=d["args"]),
             )
             tool_calls.append(tc)
-        return live
 
     async def chat(self, user_msg: dict, on_token=None, on_thinking=None, on_done=None, on_tool_call=None, on_retry=None):
         """
@@ -545,12 +467,8 @@ class Agent:
           2. 若模型要求 tool call → 並發執行 → 把結果加入 history → 再次呼叫
           3. 模型不再呼叫工具時結束
         """
-        # 如果傳入圖片但模型不支援，提醒並結束
         if "images" in user_msg and not self.profile.supports_vision:
-            self.console.print(
-                f"[bold red]❌ {self.profile.name} 不支援圖片輸入。[/bold red]"
-            )
-            return
+            raise ValueError(f"{self.profile.name} 不支援圖片輸入")
 
         self._rebuild_system_prompt()
         self.history.append(user_msg)
@@ -574,42 +492,29 @@ class Agent:
             t_start = time.perf_counter()
             self._t_thinking_end = None
 
-            live: "Live | None" = None
             try:
                 if self.profile.backend in ("gemini", "deepseek"):
                     _client = self._gemini if self.profile.backend == "gemini" else self._deepseek
-                    live = await self._stream_openai_compat(
+                    await self._stream_openai_compat(
                         _client, messages, active_tools, reply_parts, tool_calls, thinking_parts,
                         on_token, on_thinking,
                     )
                 else:
-                    live = await self._stream_ollama(
+                    await self._stream_ollama(
                         messages, active_tools, reply_parts, tool_calls, thinking_parts,
                         on_token, on_thinking, on_retry,
                     )
             except Exception as e:
-                if live:
-                    live.stop()
                 logger.error(f"模型串流錯誤：{e}")
                 if self.history and self.history[-1]["role"] == "user":
                     self.history.pop()
-                if on_token:
-                    raise
-                self.console.print(f"[bold red]❌ 模型錯誤：{e}[/bold red]")
-                return
-
-            if live:
-                live.stop()
+                raise
 
             if self._cancelled:
                 self._cancelled = False
-                self.console.print("[yellow]\n⏹ 已取消[/yellow]")
                 if self.history and self.history[-1]["role"] == "user":
                     self.history.pop()
                 return
-
-            if reply_parts and not on_token:
-                self.console.print(Markdown("".join(reply_parts)))
 
             t_total = time.perf_counter() - t_start
             usage = self._last_usage
@@ -683,15 +588,9 @@ class Agent:
                     "tool_calls": tool_calls,
                 })
 
-            with self.console.status(
-                "[bold cyan]正在執行工具...[/bold cyan]", spinner="dots"
-            ):
-                results = await asyncio.gather(
-                    *[
-                        run_tool(tc, self.tools_map, self.mcp_client)
-                        for tc in tool_calls
-                    ]
-                )
+            results = await asyncio.gather(
+                *[run_tool(tc, self.tools_map, self.mcp_client) for tc in tool_calls]
+            )
 
             if self._cancelled:
                 self._cancelled = False
@@ -704,13 +603,6 @@ class Agent:
                     raw = getattr(tc.function, "arguments", {})
                     args = json.loads(raw) if isinstance(raw, str) else dict(raw)
                     await on_tool_call(fn_name, args, result)
-            else:
-                web_results = [(fn, r) for fn, r in results if fn == "web_search"]
-                other_results = [(fn, r) for fn, r in results if fn != "web_search"]
-                if web_results:
-                    self._render_search_table(web_results)
-                for fn_name, result in other_results:
-                    self._render_mcp_result(fn_name, result)
 
             # Tool result messages (format differs by backend)
             if self.profile.backend in ("gemini", "deepseek"):
