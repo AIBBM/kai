@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -10,7 +11,7 @@ import httpx
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-from .config import MCP_SERVERS_FILE
+from .config import MCP_SERVERS_FILE, MCP_TOOL_TIMEOUT
 
 
 class MCPClient:
@@ -146,7 +147,12 @@ class MCPClient:
         server_name = self._tool_to_server[tool_name]
         session = self._sessions[server_name]
         logger.debug(f"MCP call [{server_name}] {tool_name}({arguments})")
-        result = await session.call_tool(tool_name, arguments)
+        try:
+            async with asyncio.timeout(MCP_TOOL_TIMEOUT):
+                result = await session.call_tool(tool_name, arguments)
+        except TimeoutError:
+            logger.warning(f"MCP timeout [{tool_name}] 超過 {MCP_TOOL_TIMEOUT}s")
+            return f"[MCP Timeout] {tool_name} 超過 {MCP_TOOL_TIMEOUT:.0f}s 未回應"
         parts = [item.text for item in result.content if hasattr(item, "text")]
         output = "\n".join(parts) or "[no output]"
         if result.isError:

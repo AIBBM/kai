@@ -28,6 +28,7 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")  # DeepSeek API key
 JINA_API_KEY = os.getenv("JINA_API_KEY", "")          # Jina Reader API key（可選，有 key 額度更高）
 FETCH_MAX_CHARS = int(os.getenv("FETCH_MAX_CHARS", "12000"))  # fetch_url 回傳字元上限
 OLLAMA_STREAM_TIMEOUT = int(os.getenv("OLLAMA_STREAM_TIMEOUT", "120"))  # Ollama 每個 chunk 最長等待秒數
+MCP_TOOL_TIMEOUT = float(os.getenv("MCP_TOOL_TIMEOUT", "60.0"))        # MCP 單次工具呼叫逾時秒數
 DEBUG_TOOLS = os.getenv("DEBUG_TOOLS", "0").strip().lower() in ("1", "true", "yes")  # 啟動時開啟工具除錯模式
 
 # 只輸出 DEBUG 以上的 log 到 stderr，不干擾 stdout 的對話輸出
