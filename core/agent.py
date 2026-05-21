@@ -137,20 +137,23 @@ class Agent:
                     + (f"\n- {self.mcp_context.strip()}" if self.mcp_context else "")
                     + f"\n\n## 📁 工作目錄\n- 目前工作目錄：{cwd}"
                     + "\n\n## 🚫 工具優先順序與嚴格限制（違反將導致任務失敗）"
-                    + (
-                        "\n1. 瀏覽器操作：僅限使用 Playwright MCP 工具（如 browser_navigate, browser_click）。嚴禁用 bash 執行 node / npx / playwright CLI。"
-                        if has_playwright else ""
+                    + (lambda rules: "\n" + "\n".join(f"{i+1}. {r}" for i, r in enumerate(rules)))(
+                        ([
+                            "瀏覽器操作：僅限使用 Playwright MCP 工具（如 browser_navigate, browser_click）。嚴禁用 bash 執行 node / npx / playwright CLI。",
+                        ] if has_playwright else [])
+                        + ([
+                            "檔案讀寫：僅限使用 FileSystem MCP 工具（如 read_file, write_file, list_directory）。嚴禁用 bash 執行 cat / ls / cp。",
+                        ] if has_filesystem else [])
+                        + [
+                            "系統指令：bash_exec 僅限用於 MCP 無法涵蓋的純系統操作（如 git, uv, ping）。",
+                        ]
+                        + ([
+                            "環境安全：**絕對禁止**用 bash 執行 npm install / npx / node，嚴禁在專案目錄安裝任何 npm 套件。",
+                        ] if has_playwright else [])
+                        + [
+                            f"檔案輸出：截圖、下載或建立新檔案時，必須儲存於「目前工作目錄」（{cwd}），並於回覆中提供明確的絕對路徑。",
+                        ]
                     )
-                    + (
-                        "\n2. 檔案讀寫：僅限使用 FileSystem MCP 工具（如 read_file, write_file, list_directory）。嚴禁用 bash 執行 cat / ls / cp。"
-                        if has_filesystem else ""
-                    )
-                    + "\n3. 系統指令：bash_exec 僅限用於 MCP 無法涵蓋的純系統操作（如 git, uv, ping）。"
-                    + (
-                        "\n4. 環境安全：**絕對禁止**用 bash 執行 npm install / npx / node，嚴禁在專案目錄安裝任何 npm 套件。"
-                        if has_playwright else ""
-                    )
-                    + f"\n5. 檔案輸出：截圖、下載或建立新檔案時，必須儲存於「目前工作目錄」（{cwd}），並於回覆中提供明確的絕對路徑。"
                     + "\n\n## 🛠️ 執行與排錯 SOP"
                     + (
                         "\n- 逐步執行：複雜任務請分步進行。網頁操作需確認目標元素已存在於頁面結構中，再進行點擊或截圖。"
