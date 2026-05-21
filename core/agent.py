@@ -52,7 +52,7 @@ except ImportError:
 
 
 class Agent:
-    def __init__(self, model: str):
+    def __init__(self, model: str, history_file: "Path | None" = None, agent_dir: "Path | None" = None, system_prompt: str | None = None):
         self.profile: ModelProfile = get_profile(model)
         self.console = Console()
         self.history: list[dict] = []
@@ -68,6 +68,11 @@ class Agent:
         self.mcp_context: str = ""
         self.last_prediction: str = ""
         self._cancelled = False
+        # agent 專屬目錄（存 history.json / AGENT_NOTES.md；None 表示用 cwd）
+        self._agent_dir: "Path | None" = agent_dir
+        self._history_file: Path = history_file or HISTORY_FILE
+        # 固定 system prompt（agent factory 建立的 agent 用此代替通用重建邏輯）
+        self._custom_system_prompt: str | None = system_prompt
         self._ollama = ollama.AsyncClient()
         self._gemini: AsyncOpenAI | None = (
             AsyncOpenAI(
@@ -89,7 +94,16 @@ class Agent:
         self._load_history()
 
     def _rebuild_system_prompt(self):
-        """重建 history[0] system message（日期、cwd、MCP context 每次都可能變）。"""
+        """重建 history[0] system message（日期、cwd、MCP context 每次都可能變）。
+        若有 _custom_system_prompt（agent factory 建立的 agent），直接使用，不走通用邏輯。
+        """
+        if self._custom_system_prompt is not None:
+            msg = {"role": "system", "content": self._custom_system_prompt}
+            if self.history and self.history[0]["role"] == "system":
+                self.history[0] = msg
+            else:
+                self.history.insert(0, msg)
+            return
         now = datetime.now().strftime("%Y-%m-%d")
         tool_names: set[str] = self.mcp_client.tool_names if self.mcp_client else set()
         has_mcp = bool(tool_names)
@@ -97,7 +111,8 @@ class Agent:
         has_filesystem = bool(tool_names & {"read_file", "write_file", "list_directory"})
         has_repomapper = bool(tool_names & {"repo_map", "search_identifiers"})
         cwd = os.getcwd()
-        notes_path = Path(cwd) / "AGENT_NOTES.md"
+        notes_root = self._agent_dir if self._agent_dir else Path(cwd)
+        notes_path = notes_root / "AGENT_NOTES.md"
         notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
 
         # 動態生成已連線 server 清單
@@ -196,10 +211,10 @@ class Agent:
         return any(kw in content for kw in self._TIME_KEYWORDS)
 
     def _load_history(self):
-        """啟動時嘗試從 HISTORY_FILE 載入過往對話，自動過濾時間問答。"""
-        if HISTORY_FILE.exists():
+        """啟動時嘗試從 _history_file 載入過往對話，自動過濾時間問答。"""
+        if self._history_file.exists():
             try:
-                saved = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+                saved = json.loads(self._history_file.read_text(encoding="utf-8"))
                 non_system = [m for m in saved if m.get("role") != "system"]
 
                 # 成對過濾：user 問時間 + 對應的 assistant 回覆一起移除
@@ -215,7 +230,7 @@ class Agent:
                     filtered.append(msg)
 
                 self.history.extend(filtered)
-                logger.debug(f"載入 {len(filtered)} 則歷史訊息，來自 {HISTORY_FILE}")
+                logger.debug(f"載入 {len(filtered)} 則歷史訊息，來自 {self._history_file}")
             except Exception as e:
                 logger.warning(f"載入歷史失敗：{e}")
 
@@ -235,16 +250,16 @@ class Agent:
         self._load_history()
 
     def save_history(self):
-        """將對話歷史寫入 HISTORY_FILE，只存最近 HISTORY_KEEP * 2 則。"""
+        """將對話歷史寫入 _history_file，只存最近 HISTORY_KEEP * 2 則。"""
         system = [m for m in self.history if m["role"] == "system"]
         rest = [m for m in self.history if m["role"] != "system"]
         to_save = system + rest[-(HISTORY_KEEP * 2) :]
         try:
-            HISTORY_FILE.write_text(
+            self._history_file.write_text(
                 json.dumps(to_save, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            logger.debug(f"對話已存入 {HISTORY_FILE}，共 {len(to_save)} 則")
+            logger.debug(f"對話已存入 {self._history_file}，共 {len(to_save)} 則")
         except Exception as e:
             logger.warning(f"儲存歷史失敗：{e}")
 

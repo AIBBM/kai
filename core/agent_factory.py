@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
-
-AGENTS_DIR = Path("agents")
 
 REQUIRED_FIELDS = {"name", "model", "system_prompt"}
 
@@ -37,6 +36,13 @@ CREATE_AGENT_PROMPT = """\
 """
 
 
+def _slugify(name: str) -> str:
+    """將 agent 名稱轉為合法目錄名（保留中文、移除特殊字元）。"""
+    slug = name.strip().replace(" ", "-").replace("/", "-")
+    slug = re.sub(r'[<>:"/\\|?*]', "-", slug)
+    return slug or "agent"
+
+
 def agents_dir() -> Path:
     """回傳 agents/ 目錄（相對 cwd），不存在則建立。"""
     d = Path.cwd() / "agents"
@@ -44,15 +50,28 @@ def agents_dir() -> Path:
     return d
 
 
+def agent_dir(name: str) -> Path:
+    """回傳 agents/<slug>/ 目錄（不存在則建立）。"""
+    d = agents_dir() / _slugify(name)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def list_agents() -> list[dict[str, Any]]:
-    """列出所有 agents/*.json，回傳 metadata 清單。"""
+    """列出所有 agents/*/config.json，回傳 metadata 清單。"""
     result = []
-    for p in sorted(agents_dir().glob("*.json")):
+    base = agents_dir()
+    for p in sorted(base.iterdir()):
+        if not p.is_dir():
+            continue
+        cfg = p / "config.json"
+        if not cfg.exists():
+            continue
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(cfg.read_text(encoding="utf-8"))
             result.append({
-                "file": p.stem,
-                "name": data.get("name", p.stem),
+                "dir": p.name,
+                "name": data.get("name", p.name),
                 "nickname": data.get("nickname", ""),
                 "model": data.get("model", ""),
                 "description": data.get("description", ""),
@@ -62,27 +81,40 @@ def list_agents() -> list[dict[str, Any]]:
     return result
 
 
-def load_agent(name: str) -> dict[str, Any]:
-    """載入 agents/<name>.json，回傳完整 dict。"""
+def load_agent(name: str) -> tuple[dict[str, Any], Path]:
+    """載入 agents/<name>/config.json，回傳 (data, agent_dir_path)。"""
+    base = agents_dir()
     candidates = [
-        agents_dir() / f"{name}.json",
-        agents_dir() / f"{name.lower().replace(' ', '-')}.json",
+        base / name / "config.json",
+        base / _slugify(name) / "config.json",
+        base / name.lower().replace(" ", "-") / "config.json",
     ]
     for p in candidates:
         if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
-    raise FileNotFoundError(f"找不到 agent：{name}")
+            return json.loads(p.read_text(encoding="utf-8")), p.parent
+    raise FileNotFoundError(f"找不到 agent：{name}（搜尋路徑：{[str(c.parent) for c in candidates]}）")
 
 
 def save_agent(data: dict[str, Any]) -> Path:
-    """儲存 agent config，回傳檔案路徑。"""
-    slug = data["name"].lower().replace(" ", "-").replace("/", "-")
-    # 移除非 ASCII 特殊字元，保留中文
-    import re
-    slug = re.sub(r'[<>:"/\\|?*]', "-", slug)
-    path = agents_dir() / f"{slug}.json"
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+    """儲存 agent config 到 agents/<slug>/config.json，回傳 agent 目錄路徑。
+
+    首次建立時同步寫入初始 history.json（含 system message）；
+    已存在則保留舊 history 不覆蓋。
+    """
+    d = agent_dir(data["name"])
+    (d / "config.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    history_file = d / "history.json"
+    if not history_file.exists():
+        history_file.write_text(
+            json.dumps(
+                [{"role": "system", "content": data["system_prompt"]}],
+                ensure_ascii=False, indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return d
 
 
 def validate_agent(data: dict[str, Any]) -> list[str]:
@@ -92,8 +124,6 @@ def validate_agent(data: dict[str, Any]) -> list[str]:
 
 def extract_json(text: str) -> dict[str, Any]:
     """從 LLM 回覆中提取 JSON（處理 markdown code block）。"""
-    import re
-    # 嘗試去掉 ```json ... ```
     m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
     if m:
         text = m.group(1)

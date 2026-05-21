@@ -158,6 +158,8 @@ class ChatApp(App[None]):
         self._bash_worker: "Worker | None" = None  # type: ignore[name-defined]
         self._resumed_from: Path | None = None  # /resume 載入的歸檔路徑，有新訊息後清除
         self._last_ephemeral: list[dict] | None = None  # /ask 最後一輪的問答，/save 用
+        self._agent_tabs: dict[str, Agent] = {}  # tab_id → Agent（agent factory 建立的 tabs）
+        self._main_agent: Agent | None = None    # chat tab 的主 agent（切回 chat 時還原）
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -190,6 +192,7 @@ class ChatApp(App[None]):
     def on_mount(self) -> None:
         self.title = "kai"
         self.sub_title = MODEL
+        self._main_agent = self.agent  # 記住主 chat agent，切回 chat tab 時還原
         self.query_one("#prompt", HistoryInput).focus()
         self._update_prompt_title()
         self._render_history()
@@ -352,7 +355,7 @@ class ChatApp(App[None]):
     async def _do_create_agent(self, description: str) -> None:
         """用 LLM 根據描述生成 agent config 並存檔。"""
         from core.agent_factory import CREATE_AGENT_PROMPT, extract_json, save_agent, validate_agent
-        msgs = self.query_one("#messages", VerticalScroll)
+        msgs = self._active_msgs()
         await msgs.mount(Static(f"🏭 正在設計 agent：{description}", markup=False, classes="bash-output"))
         msgs.scroll_end(animate=False)
 
@@ -382,11 +385,11 @@ class ChatApp(App[None]):
             if missing:
                 self.notify(f"LLM 回覆缺少欄位：{missing}", severity="error")
                 return
-            path = save_agent(data)
+            adir = save_agent(data)
             await msgs.mount(Static(
-                f"✅ Agent 已建立：{data['name']}（{path.name}）\n"
+                f"✅ Agent 已建立：{data['name']}（agents/{adir.name}/）\n"
                 f"   model: {data['model']}  nickname: {data.get('nickname', '—')}\n"
-                f"   輸入 /load-agent {path.stem} 載入",
+                f"   輸入 /load-agent {adir.name} 載入",
                 markup=False, classes="bash-output",
             ))
             msgs.scroll_end(animate=False)
@@ -395,33 +398,28 @@ class ChatApp(App[None]):
             self.notify(f"建立失敗：{e}", severity="error")
 
     async def _do_load_agent(self, name: str) -> None:
-        """載入 agents/<name>.json，熱切換 model + system prompt。"""
+        """載入 agents/<name>/config.json，在新 tab 開啟獨立 Agent 實例。"""
         from core.agent_factory import load_agent
         try:
-            data = load_agent(name)
+            data, adir = load_agent(name)
         except FileNotFoundError as e:
             self.notify(str(e), severity="error")
             return
 
         model = data.get("model", self.agent.profile.name)
         if model not in REGISTRY:
-            self.notify(f"未知模型：{model}，保持目前模型", severity="warning")
+            self.notify(f"未知模型：{model}，改用 {self.agent.profile.name}", severity="warning")
             model = self.agent.profile.name
 
-        # 切換模型（保留 MCP）
-        if model != self.agent.profile.name:
-            old_mcp = self.agent.mcp_client
-            old_ctx = getattr(self.agent, "mcp_context", "")
-            self.agent = Agent(model=model)
-            self.agent.mcp_client = old_mcp
-            self.agent.mcp_context = old_ctx
-
-        # 注入 agent system prompt（覆蓋 history[0]）
-        system_prompt = data["system_prompt"]
-        if self.agent.history and self.agent.history[0]["role"] == "system":
-            self.agent.history[0]["content"] = system_prompt
-        else:
-            self.agent.history.insert(0, {"role": "system", "content": system_prompt})
+        # 建立獨立 Agent：使用 agent 專屬目錄的 history.json 與 config 的 system prompt
+        agent = Agent(
+            model=model,
+            history_file=adir / "history.json",
+            agent_dir=adir,
+            system_prompt=data["system_prompt"],
+        )
+        agent.mcp_client = self.agent.mcp_client
+        agent.mcp_context = getattr(self.agent, "mcp_context", "")
 
         # 套用 nickname
         nickname = data.get("nickname") or data["name"]
@@ -434,18 +432,23 @@ class ChatApp(App[None]):
             import core.agent as _agent_mod
             _agent_mod.HISTORY_KEEP = data["history_keep"]
 
-        self._sync_cap_bar()
-        prompt = self.query_one("#prompt", HistoryInput)
-        prompt.placeholder = f"傳訊息給 {nickname}..."
-        self.sub_title = f"{nickname}（{data['name']}）"
-        self.notify(f"✅ 已載入 agent：{data['name']}", timeout=4)
+        # 建新 tab（ID 只能用 ASCII 字元，用計數器代替 slug）
+        tab_idx = len(self._agent_tabs)
+        tab_id = f"agent-{tab_idx}"
+        scroll = VerticalScroll(id=f"msgs-agent-{tab_idx}")
+        pane = TabPane(f"🤖 {nickname} ×", scroll, id=tab_id)
+        tc = self.query_one("#center-tabs", TabbedContent)
+        await tc.add_pane(pane)
+        tc.active = tab_id
+
+        self._agent_tabs[tab_id] = agent
+        self.notify(f"✅ 已開啟 agent：{data['name']}", timeout=3)
 
     async def _do_list_agents(self) -> None:
         """列出 agents/ 目錄下所有 agent。"""
         from core.agent_factory import list_agents
-        from widgets.mcp_list import MCPListScreen  # 借用 ModalScreen 模式
         agents = list_agents()
-        msgs = self.query_one("#messages", VerticalScroll)
+        msgs = self._active_msgs()
         if not agents:
             await msgs.mount(Static("📂 agents/ 目錄是空的，用 /create-agent 建立第一個 agent", markup=False, classes="bash-output"))
             msgs.scroll_end(animate=False)
@@ -453,13 +456,13 @@ class ChatApp(App[None]):
         from rich.table import Table as RichTable
         from rich.box import SIMPLE
         tbl = RichTable(box=SIMPLE, show_header=True, expand=True, padding=(0, 1))
-        tbl.add_column("檔名", style="cyan", no_wrap=True)
+        tbl.add_column("目錄", style="cyan", no_wrap=True)
         tbl.add_column("名稱", style="bold")
         tbl.add_column("暱稱")
         tbl.add_column("模型", style="dim")
         tbl.add_column("說明", style="dim")
         for a in agents:
-            tbl.add_row(a["file"], a["name"], a.get("nickname", "—"), a["model"], a.get("description", "—"))
+            tbl.add_row(a["dir"], a["name"], a.get("nickname", "—"), a["model"], a.get("description", "—"))
         await msgs.mount(Static(tbl))
         msgs.scroll_end(animate=False)
 
@@ -701,7 +704,7 @@ class ChatApp(App[None]):
                     if not p.exists():
                         self.notify(f"找不到圖片：{img_path}", severity="error")
                     else:
-                        msgs = self.query_one("#messages", VerticalScroll)
+                        msgs = self._active_msgs()
                         await msgs.mount(ImageBubble(str(p), question))
                         msgs.scroll_end(animate=False)
                         self._send(question, images=[str(p)])
@@ -709,7 +712,7 @@ class ChatApp(App[None]):
                 self.notify(f"未知指令：{cmd}", severity="warning")
             return
 
-        msgs = self.query_one("#messages", VerticalScroll)
+        msgs = self._active_msgs()
         await msgs.mount(
             Static(f"[bold]{USERNAME}[/bold]\n{text}", markup=True, classes="user-bubble")
         )
@@ -829,6 +832,29 @@ class ChatApp(App[None]):
             event.stop()
             await self._maybe_close_tab(tab_id)
 
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """切換到 agent tab 時 swap self.agent，回到 chat tab 時還原。"""
+        # event.tab.id 是 Textual 內部格式 "--content-tab-{pane_id}"，要用 event.pane.id
+        pane = event.pane
+        tab_id = pane.id if pane else None
+        if not tab_id:
+            return
+        if tab_id in self._agent_tabs:
+            self.agent = self._agent_tabs[tab_id]
+            nickname = get_nickname(self.agent.profile.name)
+            prompt = self.query_one("#prompt", HistoryInput)
+            prompt.placeholder = f"傳訊息給 {nickname}..."
+            self.sub_title = nickname
+            self._sync_cap_bar()
+        elif tab_id == "chat":
+            if self._main_agent is not None:
+                self.agent = self._main_agent
+                nickname = get_nickname(self.agent.profile.name)
+                prompt = self.query_one("#prompt", HistoryInput)
+                prompt.placeholder = f"傳訊息給 {nickname}..."
+                self.sub_title = nickname
+                self._sync_cap_bar()
+
     def on_file_tree_file_chosen(self, event: FileTree.FileChosen) -> None:
         path = event.path
         if path.suffix.lower() in _IMAGE_EXTS:
@@ -892,12 +918,24 @@ class ChatApp(App[None]):
         except Exception:
             pass
         self._open_file_tabs.pop(tab_id, None)
+        self._agent_tabs.pop(tab_id, None)
         await self.query_one("#center-tabs", TabbedContent).remove_pane(tab_id)
 
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#sidebar", Sidebar)
         sidebar.display = not sidebar.display
         self.query_one("#sidebar-handle", ResizeHandle).display = sidebar.display
+
+    def _active_msgs(self) -> VerticalScroll:
+        """回傳目前 active tab 的訊息容器。"""
+        tc = self.query_one("#center-tabs", TabbedContent)
+        active = tc.active
+        if active == "chat":
+            return self.query_one("#messages", VerticalScroll)
+        try:
+            return self.query_one(f"TabPane#{active}", TabPane).query_one(VerticalScroll)
+        except Exception:
+            return self.query_one("#messages", VerticalScroll)
 
     async def _do_cd(self, arg: str) -> None:
         """切換工作目錄：存舊 history → chdir → 重載新 history → 清 UI。"""
@@ -931,22 +969,22 @@ class ChatApp(App[None]):
             self.notify(f"compact 失敗：{e}", severity="error")
 
     async def action_clear_screen(self) -> None:
-        await self.query_one("#messages", VerticalScroll).remove_children()
+        await self._active_msgs().remove_children()
 
     async def action_clear(self) -> None:
         real_msgs = [m for m in self.agent.history if m.get("role") != "system"]
         if not real_msgs:
             self.notify("沒有對話記錄，無需清除", severity="information", timeout=2)
             return
-        await self.query_one("#messages", VerticalScroll).remove_children()
-        hist_file = Path(os.getcwd()) / "history.json"
+        await self._active_msgs().remove_children()
+        hist_file = self.agent._history_file.resolve()
+        hist_dir = hist_file.parent / ".history"
         if hist_file.exists() and self._resumed_from is None:
             from datetime import datetime
-            hist_dir = Path(os.getcwd()) / ".history"
             hist_dir.mkdir(exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             hist_file.rename(hist_dir / f"history_{ts}.json")
-            self.notify(f"歷史已歸檔至 .history/history_{ts}.json", timeout=3)
+            self.notify(f"歷史已歸檔至 {hist_dir.name}/history_{ts}.json", timeout=3)
         elif self._resumed_from is not None:
             hist_file.unlink(missing_ok=True)
             self.notify("已清除（resume 後未新增對話，不重複歸檔）", timeout=3)
@@ -958,8 +996,7 @@ class ChatApp(App[None]):
 
     async def _handle_resume(self, arg: str) -> None:
         import json as _json
-        cwd = Path(os.getcwd())
-        hist_dir = cwd / ".history"
+        hist_dir = self.agent._history_file.resolve().parent / ".history"
         archives = sorted(hist_dir.glob("history_*.json"), reverse=True) if hist_dir.exists() else []
         if not archives:
             self.notify("沒有任何歸檔 session", severity="warning")
@@ -985,7 +1022,7 @@ class ChatApp(App[None]):
                 except Exception:
                     count, preview, ts_display = 0, "(無法讀取)", p.name
                 lines.append(f"[{i}] {ts_display}  {count} 則對話  {preview}…")
-            msgs_area = self.query_one("#messages", VerticalScroll)
+            msgs_area = self._active_msgs()
             await msgs_area.mount(Static("\n".join(lines)))
             self.notify("/resume <編號> 載入對應 session", timeout=5)
             return
@@ -997,11 +1034,11 @@ class ChatApp(App[None]):
             return
         try:
             import shutil
-            shutil.copy2(archive, cwd / "history.json")
+            shutil.copy2(archive, self.agent._history_file)
         except Exception as e:
             self.notify(f"載入失敗：{e}", severity="error")
             return
-        self.query_one("#messages", VerticalScroll).remove_children()
+        self._active_msgs().remove_children()
         self.agent.reset_history()
         self._render_history()
         self._resumed_from = archive
@@ -1023,6 +1060,10 @@ class ChatApp(App[None]):
         self.agent.mcp_context = old_ctx
         self.agent._rebuild_system_prompt()
         self._think_override = None
+        # 若在 chat tab 切換模型，同步更新 _main_agent
+        tc = self.query_one("#center-tabs", TabbedContent)
+        if tc.active == "chat":
+            self._main_agent = self.agent
         self._sync_cap_bar()
         prompt = self.query_one("#prompt", HistoryInput)
         prompt.placeholder = f"傳訊息給 {get_nickname(model_name)}..."
@@ -1034,7 +1075,7 @@ class ChatApp(App[None]):
 
     @work(exclusive=True)
     async def _send(self, text: str, images: list[str] | None = None, ephemeral: bool = False) -> None:
-        msgs = self.query_one("#messages", VerticalScroll)
+        msgs = self._active_msgs()
         prompt = self.query_one("#prompt", HistoryInput)
         stream_msg: AIMessage | None = None
         buf: list[str] = []
