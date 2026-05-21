@@ -30,7 +30,7 @@ from textual.widgets import (
 )
 
 from core.agent import Agent
-from core.config import BASH_TIMEOUT, DEBUG_TOOLS, MODEL, USERNAME
+from core.config import BASH_TIMEOUT, DEBUG_TOOLS, MODEL, USERNAME, get_nickname
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
 from widgets.utils import _IMAGE_EXTS, _SUFFIX_TO_LANG
@@ -209,6 +209,7 @@ class ChatApp(App[None]):
             ("/mcp-reload", "重新載入 MCP servers（不需重啟）"),
             ("/mcp-add", "新增 MCP server  /mcp-add <name> <cmd> [args...]  或  /mcp-add <name> --url <url>"),
             ("/mcp-del", "移除 MCP server  /mcp-del <name>"),
+            ("/nickname", "查詢或設定目前模型的暱稱  /nickname [名字]"),
         ] + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
         self._sync_cap_bar()
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
@@ -243,7 +244,7 @@ class ChatApp(App[None]):
             elif role == "assistant" and content:
                 await msgs.mount(
                     Static(
-                        f"🤖 {self.agent.profile.name}",
+                        f"🤖 {get_nickname(self.agent.profile.name)}",
                         classes="ai-header",
                         markup=False,
                     )
@@ -313,6 +314,35 @@ class ChatApp(App[None]):
         self._mcp_done = asyncio.Event()
         self._mcp_task = asyncio.get_event_loop().create_task(self._mcp_lifecycle())
         self.notify("✅ MCP 重新載入完成", severity="information")
+
+    def _do_nickname(self, arg: str) -> None:
+        """查詢或設定目前模型暱稱，並寫入 .env。"""
+        from core.config import _normalize
+        model = self.agent.profile.name
+        key = f"NICKNAME_{_normalize(model)}"
+        if not arg:
+            current = get_nickname(model)
+            shown = current if current != model else "（未設定）"
+            self.notify(f"{model}\n.env key：{key}\n目前暱稱：{shown}", timeout=6)
+            return
+        env_path = Path(".env")
+        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+        replaced = False
+        for i, line in enumerate(lines):
+            if line.startswith(f"{key}=") or line.startswith(f"{key} ="):
+                lines[i] = f"{key}={arg}"
+                replaced = True
+                break
+        if not replaced:
+            lines.append(f"{key}={arg}")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        import os; os.environ[key] = arg
+        self.agent._rebuild_system_prompt()
+        self.agent.save_history()
+        prompt = self.query_one("#prompt", HistoryInput)
+        prompt.placeholder = f"傳訊息給 {arg}..."
+        self.sub_title = arg
+        self.notify(f"✅ {model} 暱稱設為「{arg}」", timeout=3)
 
     async def _do_mcp_add(self, arg: str) -> None:
         """新增 MCP server：/mcp-add <name> <command> [args...]  或  /mcp-add <name> --url <url>"""
@@ -521,6 +551,8 @@ class ChatApp(App[None]):
                 await self._do_mcp_add(arg)
             elif cmd == "/mcp-del":
                 await self._do_mcp_del(arg)
+            elif cmd == "/nickname":
+                self._do_nickname(arg)
             elif cmd == "/image":
                 if not arg:
                     self.notify("用法：/image <圖片路徑> [問題]", severity="warning")
@@ -790,7 +822,7 @@ class ChatApp(App[None]):
         self.agent.history = []
         self.agent._rebuild_system_prompt()
         self.agent.save_history()
-        self.sub_title = self.agent.profile.name
+        self.sub_title = get_nickname(self.agent.profile.name)
         self.query_one("#file-tree", FileTree).refresh_tree()
 
     async def _handle_resume(self, arg: str) -> None:
@@ -862,8 +894,8 @@ class ChatApp(App[None]):
         self._think_override = None
         self._sync_cap_bar()
         prompt = self.query_one("#prompt", HistoryInput)
-        prompt.placeholder = f"傳訊息給 {model_name}..."
-        self.sub_title = model_name
+        prompt.placeholder = f"傳訊息給 {get_nickname(model_name)}..."
+        self.sub_title = get_nickname(model_name)
         self.query_one("#sidebar", Sidebar).set_model(model_name)
         self.notify(f"已切換至 {model_name}", severity="information")
 
@@ -919,7 +951,7 @@ class ChatApp(App[None]):
                 self._spin_label = "生成中"
                 buf.append(chunk)
                 if stream_msg is None:
-                    await msgs.mount(Static(f"🤖 {self.agent.profile.name}", classes="ai-header", markup=False))
+                    await msgs.mount(Static(f"🤖 {get_nickname(self.agent.profile.name)}", classes="ai-header", markup=False))
                     stream_msg = AIMessage()
                     await msgs.mount(stream_msg)
                 now = asyncio.get_event_loop().time()
@@ -965,7 +997,7 @@ class ChatApp(App[None]):
                 stats = " · ".join(parts)
                 at_bot = _at_bottom()
                 await msgs.mount(Static(stats, classes="stats", markup=False))
-                self.sub_title = f"{self.agent.profile.name} · {stats}"
+                self.sub_title = f"{get_nickname(self.agent.profile.name)} · {stats}"
                 self.query_one("#sidebar", Sidebar).refresh_git()
                 self.query_one("#file-tree", FileTree).refresh_tree()
                 if at_bot:
@@ -1093,7 +1125,7 @@ class ChatApp(App[None]):
             prompt.remove_class("streaming")
             self._update_prompt_title()
             prompt.disabled = False
-            prompt.placeholder = f"傳訊息給 {self.agent.profile.name}..."
+            prompt.placeholder = f"傳訊息給 {get_nickname(self.agent.profile.name)}..."
             prompt.focus()
             if ephemeral and _history_snapshot is not None:
                 new_msgs = self.agent.history[len(_history_snapshot):]
@@ -1193,7 +1225,7 @@ class ChatApp(App[None]):
             prompt.disabled = False
             prompt.remove_class("streaming")
             self._update_prompt_title()
-            prompt.placeholder = f"傳訊息給 {self.agent.profile.name}..."
+            prompt.placeholder = f"傳訊息給 {get_nickname(self.agent.profile.name)}..."
             prompt.focus()
             self._bash_proc = None
             self._bash_worker = None

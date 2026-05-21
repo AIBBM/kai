@@ -31,6 +31,17 @@ OLLAMA_STREAM_TIMEOUT = int(os.getenv("OLLAMA_STREAM_TIMEOUT", "120"))  # Ollama
 MCP_TOOL_TIMEOUT = float(os.getenv("MCP_TOOL_TIMEOUT", "60.0"))        # MCP 單次工具呼叫逾時秒數
 DEBUG_TOOLS = os.getenv("DEBUG_TOOLS", "0").strip().lower() in ("1", "true", "yes")  # 啟動時開啟工具除錯模式
 
+
+def _normalize(model: str) -> str:
+    """qwen3-vl:4b → qwen3_vl_4b（供 NICKNAME_ 查找用）"""
+    import re
+    return re.sub(r"[^a-zA-Z0-9]", "_", model)
+
+
+def get_nickname(model: str) -> str:
+    """回傳 .env 設定的 NICKNAME_<model>；若無則回傳原名。"""
+    return os.getenv(f"NICKNAME_{_normalize(model)}", model)
+
 # 只輸出 DEBUG 以上的 log 到 stderr，不干擾 stdout 的對話輸出
 logger.remove()
 logger.add(

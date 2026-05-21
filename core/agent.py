@@ -110,12 +110,19 @@ class Agent:
         else:
             mcp_server_desc = ""
 
+        from core.config import get_nickname
+        nickname = get_nickname(self.profile.name)
+        nickname_line = (
+            f"你的名字是「{nickname}」。" if nickname != self.profile.name else ""
+        )
+
         system_msg = {
             "role": "system",
             "content": (
                 f"目前時間是 {now}（台灣時區 UTC+8）。"
                 f"使用者的名字是 {USERNAME}。"
-                "若對話歷史有舊的時間記錄一律作廢。"
+                + nickname_line
+                + "若對話歷史有舊的時間記錄一律作廢。"
                 + (
                     f"你是 {self.profile.name}，由 DeepSeek 開發的 AI 助手。你不是 Claude，不是 ChatGPT，也不是任何其他 AI。"
                     if self.profile.backend == "deepseek"
