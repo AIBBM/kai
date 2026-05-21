@@ -210,6 +210,9 @@ class ChatApp(App[None]):
             ("/mcp-add", "新增 MCP server  /mcp-add <name> <cmd> [args...]  或  /mcp-add <name> --url <url>"),
             ("/mcp-del", "移除 MCP server  /mcp-del <name>"),
             ("/nickname", "查詢或設定目前模型的暱稱  /nickname [名字]"),
+            ("/create-agent", "用 AI 設計新 agent  /create-agent <描述>"),
+            ("/load-agent", "載入 agent 設定  /load-agent <name>"),
+            ("/list-agents", "列出所有已建立的 agents"),
         ] + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
         self._sync_cap_bar()
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
@@ -343,6 +346,122 @@ class ChatApp(App[None]):
         prompt.placeholder = f"傳訊息給 {arg}..."
         self.sub_title = arg
         self.notify(f"✅ {model} 暱稱設為「{arg}」", timeout=3)
+
+    # ── Agent Factory ──────────────────────────────────────────────────────────
+
+    async def _do_create_agent(self, description: str) -> None:
+        """用 LLM 根據描述生成 agent config 並存檔。"""
+        from core.agent_factory import CREATE_AGENT_PROMPT, extract_json, save_agent, validate_agent
+        msgs = self.query_one("#messages", VerticalScroll)
+        await msgs.mount(Static(f"🏭 正在設計 agent：{description}", markup=False, classes="bash-output"))
+        msgs.scroll_end(animate=False)
+
+        model_list = ", ".join(REGISTRY.keys())
+        prompt_text = CREATE_AGENT_PROMPT.format(
+            description=description,
+            models=model_list,
+        )
+        try:
+            # 用一次性 ephemeral 呼叫，不污染對話歷史
+            reply_parts: list[str] = []
+            async def _collect(chunk: str) -> None:
+                reply_parts.append(chunk)
+            await self.agent.chat(
+                {"role": "user", "content": prompt_text},
+                on_token=_collect,
+                on_done=None,
+            )
+            # ephemeral: 移除剛加入的 user + assistant 訊息
+            self.agent.history = [m for m in self.agent.history if m.get("content") != prompt_text]
+            if self.agent.history and self.agent.history[-1]["role"] == "assistant":
+                self.agent.history.pop()
+
+            raw = "".join(reply_parts)
+            data = extract_json(raw)
+            missing = validate_agent(data)
+            if missing:
+                self.notify(f"LLM 回覆缺少欄位：{missing}", severity="error")
+                return
+            path = save_agent(data)
+            await msgs.mount(Static(
+                f"✅ Agent 已建立：{data['name']}（{path.name}）\n"
+                f"   model: {data['model']}  nickname: {data.get('nickname', '—')}\n"
+                f"   輸入 /load-agent {path.stem} 載入",
+                markup=False, classes="bash-output",
+            ))
+            msgs.scroll_end(animate=False)
+            self.query_one("#file-tree", FileTree).refresh_tree()
+        except Exception as e:
+            self.notify(f"建立失敗：{e}", severity="error")
+
+    async def _do_load_agent(self, name: str) -> None:
+        """載入 agents/<name>.json，熱切換 model + system prompt。"""
+        from core.agent_factory import load_agent
+        try:
+            data = load_agent(name)
+        except FileNotFoundError as e:
+            self.notify(str(e), severity="error")
+            return
+
+        model = data.get("model", self.agent.profile.name)
+        if model not in REGISTRY:
+            self.notify(f"未知模型：{model}，保持目前模型", severity="warning")
+            model = self.agent.profile.name
+
+        # 切換模型（保留 MCP）
+        if model != self.agent.profile.name:
+            old_mcp = self.agent.mcp_client
+            old_ctx = getattr(self.agent, "mcp_context", "")
+            self.agent = Agent(model=model)
+            self.agent.mcp_client = old_mcp
+            self.agent.mcp_context = old_ctx
+
+        # 注入 agent system prompt（覆蓋 history[0]）
+        system_prompt = data["system_prompt"]
+        if self.agent.history and self.agent.history[0]["role"] == "system":
+            self.agent.history[0]["content"] = system_prompt
+        else:
+            self.agent.history.insert(0, {"role": "system", "content": system_prompt})
+
+        # 套用 nickname
+        nickname = data.get("nickname") or data["name"]
+        import os as _os
+        from core.config import _normalize
+        _os.environ[f"NICKNAME_{_normalize(model)}"] = nickname
+
+        # 套用 history_keep
+        if "history_keep" in data:
+            import core.agent as _agent_mod
+            _agent_mod.HISTORY_KEEP = data["history_keep"]
+
+        self._sync_cap_bar()
+        prompt = self.query_one("#prompt", HistoryInput)
+        prompt.placeholder = f"傳訊息給 {nickname}..."
+        self.sub_title = f"{nickname}（{data['name']}）"
+        self.notify(f"✅ 已載入 agent：{data['name']}", timeout=4)
+
+    async def _do_list_agents(self) -> None:
+        """列出 agents/ 目錄下所有 agent。"""
+        from core.agent_factory import list_agents
+        from widgets.mcp_list import MCPListScreen  # 借用 ModalScreen 模式
+        agents = list_agents()
+        msgs = self.query_one("#messages", VerticalScroll)
+        if not agents:
+            await msgs.mount(Static("📂 agents/ 目錄是空的，用 /create-agent 建立第一個 agent", markup=False, classes="bash-output"))
+            msgs.scroll_end(animate=False)
+            return
+        from rich.table import Table as RichTable
+        from rich.box import SIMPLE
+        tbl = RichTable(box=SIMPLE, show_header=True, expand=True, padding=(0, 1))
+        tbl.add_column("檔名", style="cyan", no_wrap=True)
+        tbl.add_column("名稱", style="bold")
+        tbl.add_column("暱稱")
+        tbl.add_column("模型", style="dim")
+        tbl.add_column("說明", style="dim")
+        for a in agents:
+            tbl.add_row(a["file"], a["name"], a.get("nickname", "—"), a["model"], a.get("description", "—"))
+        await msgs.mount(Static(tbl))
+        msgs.scroll_end(animate=False)
 
     async def _do_mcp_add(self, arg: str) -> None:
         """新增 MCP server：/mcp-add <name> <command> [args...]  或  /mcp-add <name> --url <url>"""
@@ -553,6 +672,18 @@ class ChatApp(App[None]):
                 await self._do_mcp_del(arg)
             elif cmd == "/nickname":
                 self._do_nickname(arg)
+            elif cmd == "/create-agent":
+                if not arg:
+                    self.notify("用法：/create-agent <描述>", severity="warning")
+                else:
+                    await self._do_create_agent(arg)
+            elif cmd == "/load-agent":
+                if not arg:
+                    self.notify("用法：/load-agent <name>", severity="warning")
+                else:
+                    await self._do_load_agent(arg)
+            elif cmd == "/list-agents":
+                await self._do_list_agents()
             elif cmd == "/image":
                 if not arg:
                     self.notify("用法：/image <圖片路徑> [問題]", severity="warning")
