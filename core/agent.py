@@ -66,6 +66,7 @@ class Agent:
             self.profile.num_ctx = NUM_CTX
         self.mcp_client: "MCPClient | None" = None
         self.mcp_context: str = ""
+        self.last_prediction: str = ""
         self._cancelled = False
         self._ollama = ollama.AsyncClient()
         self._gemini: AsyncOpenAI | None = (
@@ -126,6 +127,7 @@ class Agent:
                     if notes
                     else ""
                 )
+                + "\n\n每次回覆末尾附上 <next>預測用戶下一句（15字以內）</next>，不解釋此標籤。"
                 + (
                     "遇到任何不確定的事實、日期、新聞、時事，必須直接呼叫 web_search 工具。"
                     "**嚴禁說「我要搜尋」或「請稍等」，請直接呼叫工具。**"
@@ -611,7 +613,14 @@ class Agent:
                     if on_done:
                         await on_done(t_total, self._t_thinking_end and self._t_thinking_end - t_start, usage[0], usage[1])
                     return
-                assistant_msg: dict = {"role": "assistant", "content": "".join(reply_parts)}
+                _full_reply = "".join(reply_parts)
+                _next_m = re.search(r"\s*<next>(.*?)</next>\s*$", _full_reply, re.DOTALL)
+                if _next_m:
+                    self.last_prediction = _next_m.group(1).strip()
+                    _full_reply = _full_reply[: _next_m.start()].rstrip()
+                else:
+                    self.last_prediction = ""
+                assistant_msg: dict = {"role": "assistant", "content": _full_reply}
                 if self.profile.backend == "deepseek" and thinking_parts:
                     assistant_msg["reasoning_content"] = "".join(thinking_parts)
                 self.history.append(assistant_msg)

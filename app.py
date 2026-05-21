@@ -942,8 +942,9 @@ class ChatApp(App[None]):
                         msgs.scroll_end(animate=False)
 
             async def on_done(elapsed, thinking_s, gen_tok, prompt_tok) -> None:
+                _display = re.sub(r"\s*<next>.*?</next>\s*$", "", "".join(buf), flags=re.DOTALL).rstrip()
                 if stream_msg:
-                    await stream_msg.update_content("".join(buf), final=True)
+                    await stream_msg.update_content(_display, final=True)
                 elif not buf:
                     await msgs.mount(
                         Static(
@@ -977,6 +978,9 @@ class ChatApp(App[None]):
                 self.query_one("#file-tree", FileTree).refresh_tree()
                 if at_bot:
                     msgs.scroll_end(animate=False)
+                prediction = self.agent.last_prediction
+                if prediction:
+                    prompt.set_reactive(HistoryInput._suggestion, prediction)
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
                 nonlocal stream_msg, buf

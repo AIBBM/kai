@@ -49,6 +49,12 @@ class HistoryInput(Input):
         self.cursor_position = len(before) + len(marker)
 
     def _on_key(self, event: events.Key) -> None:
+        if event.key == "tab" and self._suggestion and not self.value:
+            self.value = self._suggestion
+            self.cursor_position = len(self.value)
+            event.prevent_default()
+            event.stop()
+            return
         if event.key == "up":
             event.prevent_default()
             event.stop()
