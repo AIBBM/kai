@@ -90,10 +90,24 @@ class Agent:
     def _rebuild_system_prompt(self):
         """重建 history[0] system message（日期、cwd、MCP context 每次都可能變）。"""
         now = datetime.now().strftime("%Y-%m-%d")
-        has_mcp = bool(self.mcp_client and self.mcp_client.tool_names)
+        tool_names: set[str] = self.mcp_client.tool_names if self.mcp_client else set()
+        has_mcp = bool(tool_names)
+        has_playwright = bool(tool_names & {"browser_navigate", "browser_click", "browser_snapshot"})
+        has_filesystem = bool(tool_names & {"read_file", "write_file", "list_directory"})
         cwd = os.getcwd()
         notes_path = Path(cwd) / "AGENT_NOTES.md"
         notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
+
+        # 動態生成已連線 server 清單
+        if has_mcp and self.mcp_client:
+            server_parts = [
+                f"{name}（{count} 個工具）"
+                for name, count in self.mcp_client.server_summary.items()
+            ]
+            mcp_server_desc = "、".join(server_parts)
+        else:
+            mcp_server_desc = ""
+
         system_msg = {
             "role": "system",
             "content": (
@@ -119,23 +133,32 @@ class Agent:
                     else ""
                 )
                 + (
-                    "\n\n你已連接"
-                    + ("資料庫查詢工具（台股資料）、" if "可查詢的資料表" in self.mcp_context else "")
-                    + "檔案系統與瀏覽器等 MCP 工具。工具清單已內建，無需重複列舉。"
-                    f"\n\n## 📁 工作目錄與環境"
-                    f"\n- 目前工作目錄：{cwd}"
+                    f"\n\n你已連接以下 MCP server：{mcp_server_desc}。工具清單已內建，無需重複列舉。"
                     + (f"\n- {self.mcp_context.strip()}" if self.mcp_context else "")
+                    + f"\n\n## 📁 工作目錄\n- 目前工作目錄：{cwd}"
                     + "\n\n## 🚫 工具優先順序與嚴格限制（違反將導致任務失敗）"
-                    "\n1. 瀏覽器操作：僅限使用 Playwright MCP 工具（如 browser_navigate, browser_click）。嚴禁用 bash 執行 node / npx / playwright CLI。"
-                    "\n2. 檔案讀寫：僅限使用 FileSystem MCP 工具（如 read_file, write_file, list_directory）。嚴禁用 bash 執行 cat / ls / cp。"
-                    "\n3. 系統指令：bash_exec 僅限用於 MCP 無法涵蓋的純系統操作（如 git, uv, ping）。"
-                    "\n4. 環境安全：**絕對禁止**用 bash 執行 npm install / npx / node，嚴禁在專案目錄安裝任何 npm 套件。"
-                    f"\n5. 檔案輸出：截圖、下載或建立新檔案時，必須儲存於「目前工作目錄」（{cwd}），並於回覆中提供明確的絕對路徑。"
-                    "\n\n## 🛠️ 執行與排錯 SOP"
-                    "\n- 逐步執行：複雜任務請分步進行。網頁操作需確認目標元素已存在於頁面結構中，再進行點擊或截圖。"
-                    "\n- 嚴禁盲目重試：當 browser 操作因 selector 找不到元素失敗時，**嚴禁用相同 selector 重試**。必須立即呼叫 `browser_snapshot`（不帶 filename 參數），讀取回傳的頁面結構，找出正確的 ref 或描述後再繼續。"
-                    "\n- 參數限制：`browser_take_screenshot` 的 `type` 參數僅接受 \"png\" 或 \"jpeg\"，不需要時請省略。"
-                    "\n- 嚴禁捏造：回答必須基於工具回傳的真實資料，工具失敗時誠實告知。"
+                    + (
+                        "\n1. 瀏覽器操作：僅限使用 Playwright MCP 工具（如 browser_navigate, browser_click）。嚴禁用 bash 執行 node / npx / playwright CLI。"
+                        if has_playwright else ""
+                    )
+                    + (
+                        "\n2. 檔案讀寫：僅限使用 FileSystem MCP 工具（如 read_file, write_file, list_directory）。嚴禁用 bash 執行 cat / ls / cp。"
+                        if has_filesystem else ""
+                    )
+                    + "\n3. 系統指令：bash_exec 僅限用於 MCP 無法涵蓋的純系統操作（如 git, uv, ping）。"
+                    + (
+                        "\n4. 環境安全：**絕對禁止**用 bash 執行 npm install / npx / node，嚴禁在專案目錄安裝任何 npm 套件。"
+                        if has_playwright else ""
+                    )
+                    + f"\n5. 檔案輸出：截圖、下載或建立新檔案時，必須儲存於「目前工作目錄」（{cwd}），並於回覆中提供明確的絕對路徑。"
+                    + "\n\n## 🛠️ 執行與排錯 SOP"
+                    + (
+                        "\n- 逐步執行：複雜任務請分步進行。網頁操作需確認目標元素已存在於頁面結構中，再進行點擊或截圖。"
+                        "\n- 嚴禁盲目重試：當 browser 操作因 selector 找不到元素失敗時，**嚴禁用相同 selector 重試**。必須立即呼叫 `browser_snapshot`（不帶 filename 參數），讀取回傳的頁面結構，找出正確的 ref 或描述後再繼續。"
+                        "\n- 參數限制：`browser_take_screenshot` 的 `type` 參數僅接受 \"png\" 或 \"jpeg\"，不需要時請省略。"
+                        if has_playwright else ""
+                    )
+                    + "\n- 嚴禁捏造：回答必須基於工具回傳的真實資料，工具失敗時誠實告知。"
                     "\n- 任務收尾：完成任務後，必須用文字清楚總結最終結果與狀態，不得無聲結束對話。"
                     if has_mcp
                     else ""
