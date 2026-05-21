@@ -57,8 +57,8 @@ class HistoryInput(Input):
                 self._real_placeholder = self.placeholder
             self.placeholder = text
 
-    def watch_value(self, value: str) -> None:
-        super().watch_value(value)  # 父類會清掉 _suggestion
+    def _watch_value(self, value: str) -> None:
+        super()._watch_value(value)  # 父類會清掉 _suggestion
         if value and self._real_placeholder:
             self.placeholder = self._real_placeholder
             self._real_placeholder = ""
