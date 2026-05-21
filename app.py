@@ -980,7 +980,7 @@ class ChatApp(App[None]):
                     msgs.scroll_end(animate=False)
                 prediction = self.agent.last_prediction
                 if prediction:
-                    prompt.set_reactive(HistoryInput._suggestion, prediction)
+                    prompt._suggestion = prediction
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
                 nonlocal stream_msg, buf
