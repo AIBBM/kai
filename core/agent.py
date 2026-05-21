@@ -618,8 +618,10 @@ class Agent:
                 if _next_m:
                     self.last_prediction = _next_m.group(1).strip()
                     _full_reply = _full_reply[: _next_m.start()].rstrip()
+                    logger.debug(f"<next> extracted: {repr(self.last_prediction)}")
                 else:
                     self.last_prediction = ""
+                    logger.debug(f"<next> not found, reply tail: {repr(_full_reply[-80:])}")
                 assistant_msg: dict = {"role": "assistant", "content": _full_reply}
                 if self.profile.backend == "deepseek" and thinking_parts:
                     assistant_msg["reasoning_content"] = "".join(thinking_parts)

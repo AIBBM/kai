@@ -979,7 +979,9 @@ class ChatApp(App[None]):
                 if at_bot:
                     msgs.scroll_end(animate=False)
                 prediction = self.agent.last_prediction
+                logger.debug(f"ghost text prediction: {repr(prediction)}")
                 if prediction:
+                    prompt.focus()
                     prompt._suggestion = prediction
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
