@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from textual import events
+from textual.binding import Binding
 from textual.widgets import Input
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
@@ -17,12 +18,29 @@ class HistoryInput(Input):
     ScrollView's scroll_up/scroll_down bindings consume them.
     """
 
+    BINDINGS = [
+        Binding("tab", "apply_prediction", "Apply prediction", show=False),
+    ]
+
+    def action_apply_prediction(self) -> None:
+        if self._real_placeholder and not self.value:
+            prediction = self.placeholder
+            self.placeholder = self._real_placeholder
+            self._real_placeholder = ""
+            self._suggestion = ""
+            self._pending_prediction = ""
+            self.value = prediction
+            self.cursor_position = len(self.value)
+        else:
+            self.screen.focus_next()
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._undo_stack: list[tuple[str, int]] = []
         self._multiline_paste: str | None = None
         self._multiline_marker: str | None = None
         self._real_placeholder: str = ""  # saved when ghost text swaps placeholder
+        self._pending_prediction: str = ""  # last prediction, for re-show on empty
 
     def on_paste(self, event: events.Paste) -> None:
         text = event.text
@@ -51,6 +69,7 @@ class HistoryInput(Input):
 
     def show_prediction(self, text: str) -> None:
         """顯示 AI 預測 ghost text。input 空時用 placeholder swap，有內容時用 _suggestion。"""
+        self._pending_prediction = text
         self._suggestion = text
         if not self.value:
             if not self._real_placeholder:
@@ -62,19 +81,15 @@ class HistoryInput(Input):
         if value and self._real_placeholder:
             self.placeholder = self._real_placeholder
             self._real_placeholder = ""
+        elif not value and not self._real_placeholder and self._pending_prediction:
+            self.show_prediction(self._pending_prediction)
 
     def _on_key(self, event: events.Key) -> None:
-        if event.key == "tab":
-            suggestion = self._suggestion
-            if suggestion and not self.value:
-                if self._real_placeholder:
-                    self.placeholder = self._real_placeholder
-                    self._real_placeholder = ""
-                self.value = suggestion
-                self.cursor_position = len(self.value)
-                event.prevent_default()
-                event.stop()
-                return
+        if event.key == "right" and self._real_placeholder and not self.value:
+            self.action_apply_prediction()
+            event.prevent_default()
+            event.stop()
+            return
         if event.key == "up":
             event.prevent_default()
             event.stop()

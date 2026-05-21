@@ -207,7 +207,7 @@ class ChatApp(App[None]):
             ("/cd", "切換工作目錄  /cd <路徑>"),
             ("/mcp-list", "列出所有 MCP server 與工具說明"),
             ("/mcp-reload", "重新載入 MCP servers（不需重啟）"),
-            ("/mcp-add", "新增 stdio MCP server  /mcp-add <name> <command> [args...]"),
+            ("/mcp-add", "新增 MCP server  /mcp-add <name> <cmd> [args...]  或  /mcp-add <name> --url <url>"),
             ("/mcp-del", "移除 MCP server  /mcp-del <name>"),
         ] + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
         self._sync_cap_bar()
@@ -293,23 +293,12 @@ class ChatApp(App[None]):
 
     async def _do_mcp_list(self) -> None:
         """顯示所有已連線 MCP server 與工具說明。"""
+        from widgets.mcp_list import MCPListScreen
         mcp = self.agent.mcp_client
-        msgs = self.query_one("#messages", VerticalScroll)
         if not mcp or not mcp.tool_names:
-            await msgs.mount(Static("🔧 目前沒有連線中的 MCP server", markup=False, classes="bash-output"))
-            msgs.scroll_end(animate=False)
+            self.notify("目前沒有連線中的 MCP server", severity="warning")
             return
-        lines = []
-        for server, tools in mcp.tools_by_server.items():
-            lines.append(f"### {server}  ({len(tools)} 個工具)")
-            for t in tools:
-                desc = f" — {t['description']}" if t["description"] else ""
-                lines.append(f"- **{t['name']}**{desc}")
-            lines.append("")
-        body = "\n".join(lines).strip()
-        from textual.widgets import Markdown
-        await msgs.mount(Markdown(body))
-        msgs.scroll_end(animate=False)
+        self.push_screen(MCPListScreen(mcp.tools_by_server))
 
     async def _do_mcp_reload(self) -> None:
         """停止現有 MCP lifecycle，重新啟動。"""
@@ -326,15 +315,15 @@ class ChatApp(App[None]):
         self.notify("✅ MCP 重新載入完成", severity="information")
 
     async def _do_mcp_add(self, arg: str) -> None:
-        """新增 stdio MCP server：/mcp-add <name> <command> [args...]"""
+        """新增 MCP server：/mcp-add <name> <command> [args...]  或  /mcp-add <name> --url <url>"""
         if not arg:
-            self.notify("用法：/mcp-add <name> <command> [args...]", severity="warning")
+            self.notify("用法：/mcp-add <name> <command> [args...]  或  /mcp-add <name> --url <url>", severity="warning")
             return
         parts = arg.split()
         if len(parts) < 2:
-            self.notify("用法：/mcp-add <name> <command> [args...]", severity="warning")
+            self.notify("用法：/mcp-add <name> <command> [args...]  或  /mcp-add <name> --url <url>", severity="warning")
             return
-        name, command, *extra_args = parts
+        name, *rest = parts
         from core.config import MCP_SERVERS_FILE
         data = {}
         if MCP_SERVERS_FILE.exists():
@@ -342,10 +331,15 @@ class ChatApp(App[None]):
                 data = json.loads(MCP_SERVERS_FILE.read_text(encoding="utf-8"))
             except Exception:
                 pass
-        data.setdefault("mcpServers", {})[name] = {
-            "command": command,
-            "args": extra_args,
-        }
+        if rest[0] == "--url":
+            if len(rest) < 2:
+                self.notify("用法：/mcp-add <name> --url <url>", severity="warning")
+                return
+            entry: dict = {"type": "http", "url": rest[1]}
+        else:
+            command, *extra_args = rest
+            entry = {"command": command, "args": extra_args}
+        data.setdefault("mcpServers", {})[name] = entry
         MCP_SERVERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         self.notify(f"✅ 已新增 {name}，執行 /mcp-reload 生效", severity="information")
 
@@ -925,19 +919,17 @@ class ChatApp(App[None]):
                 self._spin_label = "生成中"
                 buf.append(chunk)
                 if stream_msg is None:
-                    await msgs.mount(
-                        Static(
-                            f"🤖 {self.agent.profile.name}",
-                            classes="ai-header",
-                            markup=False,
-                        )
-                    )
+                    await msgs.mount(Static(f"🤖 {self.agent.profile.name}", classes="ai-header", markup=False))
                     stream_msg = AIMessage()
                     await msgs.mount(stream_msg)
                 now = asyncio.get_event_loop().time()
                 if now - _last_render >= 0.1:
                     _last_render = now
-                    await stream_msg.update_content("".join(buf))
+                    content = "".join(buf)
+                    idx = content.find("<next>")
+                    if idx != -1:
+                        content = content[:idx].rstrip()
+                    await stream_msg.update_content(content)
                     if _at_bottom():
                         msgs.scroll_end(animate=False)
 
@@ -978,18 +970,13 @@ class ChatApp(App[None]):
                 self.query_one("#file-tree", FileTree).refresh_tree()
                 if at_bot:
                     msgs.scroll_end(animate=False)
-                prediction = self.agent.last_prediction
-                logger.debug(f"ghost text prediction: {repr(prediction)}")
-                if prediction:
-                    prompt.focus()
-                    prompt.show_prediction(prediction)
-
             async def on_tool_call(name: str, args: dict, result: str) -> None:
                 nonlocal stream_msg, buf
                 self._spin_label = "工具回應中"
                 # 工具卡出現前先把目前的回覆定稿，讓下一輪在工具卡之後建新的 AIMessage
                 if stream_msg and buf:
-                    await stream_msg.update_content("".join(buf), final=True)
+                    _pre = re.sub(r"\s*<next>.*?</next>\s*$", "", "".join(buf), flags=re.DOTALL).rstrip()
+                    await stream_msg.update_content(_pre, final=True)
                 stream_msg = None
                 buf.clear()
                 # 只比對工具層自己產生的錯誤前綴，避免檔案內容含 "error" 字串誤判
@@ -1063,8 +1050,6 @@ class ChatApp(App[None]):
                 on_tool_call=on_tool_call,
                 on_retry=on_retry,
             )
-            if stream_msg and buf:
-                await stream_msg.update_content("".join(buf), final=True)
 
         except Exception as e:
             err_str = str(e).lower()
@@ -1117,6 +1102,11 @@ class ChatApp(App[None]):
                 self.agent.save_history()
                 if self._last_ephemeral:
                     self.notify("💾 /save 可將此回答存入對話歷史", timeout=4)
+
+        if not ephemeral:
+            prediction = self.agent.last_prediction
+            if prediction:
+                prompt.show_prediction(prediction)
 
     # ── Bash 直接執行 ─────────────────────────────────────────────────────────
 
