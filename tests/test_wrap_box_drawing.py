@@ -1,4 +1,3 @@
-import pytest
 from widgets.utils import _wrap_box_drawing
 
 
@@ -44,12 +43,12 @@ def test_trailing_blank_lines_outside_fence():
     result = _wrap_box_drawing(text)
     lines = result.split("\n")
     assert "```" in lines
-    fence_positions = [i for i, l in enumerate(lines) if l == "```"]
+    fence_positions = [i for i, ln in enumerate(lines) if ln == "```"]
     assert len(fence_positions) == 2
     closing = fence_positions[1]
     # everything after closing fence should be blank
     after = lines[closing + 1 :]
-    assert all(l.strip() == "" for l in after)
+    assert all(ln.strip() == "" for ln in after)
 
 
 def test_inline_code_not_matched_as_fence():

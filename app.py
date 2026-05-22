@@ -156,11 +156,14 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         self._last_file_copy: dict | None = None
         self._bash_proc: asyncio.subprocess.Process | None = None
         self._bash_worker: "Worker | None" = None  # type: ignore[name-defined]
-        self._resumed_from: Path | None = None  # /resume 載入的歸檔路徑，有新訊息後清除
+        self._resumed_from: Path | None = None  # 目前 tab 的 resume 歸檔路徑，有新訊息後清除
+        self._tab_resumed_from: dict[str, Path | None] = {}  # tab_id → resumed_from（切 tab 時還原）
         self._session_name: str = ""            # 目前 session 的自訂名稱，/rename 設定
+        self._tab_session_names: dict[str, str] = {}  # tab_id → session name（切 tab 時還原）
         self._last_ephemeral: list[dict] | None = None  # /ask 最後一輪的問答，/save 用
         self._agent_tabs: dict[str, Agent] = {}  # tab_id → Agent（agent factory 建立的 tabs）
         self._main_agent: Agent | None = None    # chat tab 的主 agent（切回 chat 時還原）
+        self._pending_open_agent: str | None = None  # open_agent 工具排程，_send finally 執行
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -194,13 +197,42 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         self.title = "kai"
         self.sub_title = MODEL
         self._main_agent = self.agent  # 記住主 chat agent，切回 chat tab 時還原
+        # 讓主 chat AI 能呼叫 open_agent 工具開啟副 agent tab
+        _app = self
+
+        async def _open_agent_tool(query: str) -> str:
+            from core.agent_factory import find_agent, list_agents
+            dir_name = find_agent(query)
+            if not dir_name:
+                agents = list_agents()
+                names = "、".join(
+                    f"{a['name']}（{a['dir']}）" for a in agents
+                ) or "（無）"
+                return f"找不到符合「{query}」的 agent。可用 agent：{names}"
+            _app._pending_open_agent = dir_name
+            return f"✅ 找到 agent：{dir_name}，正在開啟..."
+
+        self.agent.tools_map["open_agent"] = _open_agent_tool
         # 還原跨重啟的 resume 狀態，避免誤將 resume 後的 history.json 重複歸檔
-        _state = self.agent._history_file.resolve().parent / ".history" / ".resumed_from"
+        _hist_dir = self.agent._history_file.resolve().parent / ".history"
+        _state = _hist_dir / ".resumed_from"
         if _state.exists():
             _arch = _state.parent / _state.read_text(encoding="utf-8").strip()
             if _arch.exists():
                 self._resumed_from = _arch
+                self._tab_resumed_from["chat"] = _arch
                 self._load_session_name_from_archive(_arch)
+        # 還原 /rename 命名（優先於歸檔名稱）
+        _name_file = _hist_dir / ".current_name"
+        if _name_file.exists():
+            try:
+                _saved_name = _name_file.read_text(encoding="utf-8").strip()
+                if _saved_name:
+                    self._session_name = _saved_name
+                    self._tab_session_names["chat"] = _saved_name
+                    self._update_subtitle()
+            except Exception:
+                pass
         self.query_one("#prompt", HistoryInput).focus()
         self._update_prompt_title()
         self._render_history()
@@ -235,11 +267,15 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
     async def _render_history(self) -> None:
         """把 agent.history 渲染到 chat 視窗（啟動 / /cd 後呼叫）。"""
         msgs = self.query_one("#messages", VerticalScroll)
+        await self._render_history_into(msgs, self.agent)
+
+    async def _render_history_into(self, msgs: VerticalScroll, agent: "Agent") -> None:
+        """核心渲染邏輯，可指定目標 scroll 與 agent（供 agent tab 直接呼叫）。"""
         widgets: list = []
         ai_updates: list[tuple[AIMessage, str]] = []
-        nickname = get_nickname(self.agent.profile.name)
+        nickname = get_nickname(agent.profile.name)
 
-        for msg in self.agent.history:
+        for msg in agent.history:
             role = msg.get("role")
             content = msg.get("content") or ""
             if role == "system":
@@ -629,7 +665,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
     async def on_click(self, event: events.Click) -> None:
         widget, region = self.screen.get_widget_at(event.screen_x, event.screen_y)
         wid = widget.id or "" if widget else ""
-        if not wid.startswith("--content-tab-ft-"):
+        if not wid.startswith("--content-tab-") or wid == "--content-tab-chat":
             return
         tab_id = wid[len("--content-tab-"):]
         if event.screen_x >= region.x + region.width - 2:
@@ -648,7 +684,9 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             nickname = get_nickname(self.agent.profile.name)
             prompt = self.query_one("#prompt", HistoryInput)
             prompt.placeholder = f"傳訊息給 {nickname}..."
-            self.sub_title = nickname
+            self._resumed_from = self._tab_resumed_from.get(tab_id, None)
+            self._session_name = self._tab_session_names.get(tab_id, "")
+            self._update_subtitle()
             self._sync_cap_bar()
         elif tab_id == "chat":
             if self._main_agent is not None:
@@ -656,7 +694,9 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                 nickname = get_nickname(self.agent.profile.name)
                 prompt = self.query_one("#prompt", HistoryInput)
                 prompt.placeholder = f"傳訊息給 {nickname}..."
-                self.sub_title = nickname
+                self._resumed_from = self._tab_resumed_from.get("chat", None)
+                self._session_name = self._tab_session_names.get("chat", "")
+                self._update_subtitle()
                 self._sync_cap_bar()
 
     def on_file_tree_file_chosen(self, event: FileTree.FileChosen) -> None:

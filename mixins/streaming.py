@@ -32,6 +32,12 @@ class StreamingMixin:
             # 清除持久化 resume 狀態：有新訊息代表已脫離 resume 快照
             _state = self.agent._history_file.resolve().parent / ".history" / ".resumed_from"
             _state.unlink(missing_ok=True)
+            try:
+                from textual.widgets import TabbedContent
+                tab_id = self.query_one("#center-tabs", TabbedContent).active or "chat"
+                self._tab_resumed_from.pop(tab_id, None)
+            except Exception:
+                pass
         _history_snapshot = [m.copy() for m in self.agent.history] if ephemeral else None
         self._spin_idx = 0
         self._spin_label = "等待回覆"
@@ -241,3 +247,7 @@ class StreamingMixin:
             prediction = self.agent.last_prediction
             if prediction:
                 prompt.show_prediction(prediction)
+            _pending = getattr(self, "_pending_open_agent", None)
+            if _pending:
+                self._pending_open_agent = None  # type: ignore[attr-defined]
+                await self._do_load_agent(_pending)

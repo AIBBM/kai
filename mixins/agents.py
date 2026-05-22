@@ -80,27 +80,22 @@ class AgentsMixin:
         pane = TabPane(f"🤖 {nickname} ×", scroll, id=tab_id)
         tc = self.query_one("#center-tabs", TabbedContent)
         await tc.add_pane(pane)
-        tc.active = tab_id
         self._agent_tabs[tab_id] = agent
+        tc.active = tab_id
+        self.agent = agent
+        await self._render_history_into(scroll, agent)
         self.notify(f"✅ 已開啟 agent：{data['name']}", timeout=3)
 
     async def _do_list_agents(self) -> None:
         from core.agent_factory import list_agents
-        from rich.box import SIMPLE
-        from rich.table import Table as RichTable
+        from widgets.agents_screen import AgentsScreen
         agents = list_agents()
-        msgs = self._active_msgs()
         if not agents:
-            await msgs.mount(Static("📂 agents/ 目錄是空的，用 /create-agent 建立第一個 agent", markup=False, classes="bash-output"))
-            msgs.scroll_end(animate=False)
+            self.notify("agents/ 目錄是空的，用 /create-agent 建立第一個 agent", severity="warning")
             return
-        tbl = RichTable(box=SIMPLE, show_header=True, expand=True, padding=(0, 1))
-        tbl.add_column("目錄", style="cyan", no_wrap=True)
-        tbl.add_column("名稱", style="bold")
-        tbl.add_column("暱稱")
-        tbl.add_column("模型", style="dim")
-        tbl.add_column("說明", style="dim")
-        for a in agents:
-            tbl.add_row(a["dir"], a["name"], a.get("nickname", "—"), a["model"], a.get("description", "—"))
-        await msgs.mount(Static(tbl))
-        msgs.scroll_end(animate=False)
+
+        async def _on_result(dir_name: str | None) -> None:
+            if dir_name:
+                await self._do_load_agent(dir_name)
+
+        self.push_screen(AgentsScreen(agents), _on_result)

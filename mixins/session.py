@@ -56,11 +56,25 @@ class SessionMixin:
         self.agent.save_history()
         self._prev_cwd = os.getcwd()
         os.chdir(target)
+        # reset session state for new directory
+        self._resumed_from = None  # type: ignore[attr-defined]
+        self._tab_resumed_from["chat"] = None  # type: ignore[attr-defined]
+        self._session_name = ""  # type: ignore[attr-defined]
+        self._tab_session_names.pop("chat", None)  # type: ignore[attr-defined]
+        # check if new directory has a persisted resume state
+        _state = self.agent._history_file.resolve().parent / ".history" / ".resumed_from"
+        if _state.exists():
+            _arch = _state.parent / _state.read_text(encoding="utf-8").strip()
+            if _arch.exists():
+                self._resumed_from = _arch
+                self._tab_resumed_from["chat"] = _arch
+                self._load_session_name_from_archive(_arch)
         self.query_one("#sb-cwd", Static).update(str(target))
         self.query_one("#file-tree", FileTree).refresh_tree()
         self.agent.reset_history()
         await self.query_one("#messages", VerticalScroll).remove_children()
         self._render_history()
+        self._update_subtitle()
         self.notify(f"已切換至 {target}", severity="information")
 
     async def action_compact(self) -> None:
@@ -73,7 +87,7 @@ class SessionMixin:
         try:
             await self.agent.compact_history()
             await msgs.remove_children()
-            self._render_history()
+            await self._render_history_into(msgs, self.agent)
             self.notify("✅ 對話已壓縮", severity="information")
         except Exception as e:
             self.notify(f"compact 失敗：{e}", severity="error")
@@ -88,20 +102,32 @@ class SessionMixin:
         name = getattr(self, "_session_name", "")
         self.sub_title = f"{nickname} · {name}" if name else nickname
 
+    def _current_tab_id(self) -> str:
+        from textual.widgets import TabbedContent
+        try:
+            return self.query_one("#center-tabs", TabbedContent).active or "chat"
+        except Exception:
+            return "chat"
+
     def _save_session_name_for_archive(self, archive: Path) -> None:
         """把 _session_name 寫入 .names.json，然後清除。"""
         name = getattr(self, "_session_name", "")
-        if not name:
-            return
-        names_file = archive.parent / ".names.json"
+        if name:
+            names_file = archive.parent / ".names.json"
+            try:
+                names: dict = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
+                names[archive.name] = name
+                names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                logger.warning(f"無法儲存 session 名稱：{archive.name}")
+            self._session_name = ""  # type: ignore[attr-defined]
+            self._tab_session_names.pop(self._current_tab_id(), None)  # type: ignore[attr-defined]
+            self._update_subtitle()
+        # 名稱已歸入 .names.json，刪除暫存的 .current_name
         try:
-            names: dict = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
-            names[archive.name] = name
-            names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._current_name_file().unlink(missing_ok=True)
         except Exception:
-            logger.warning(f"無法儲存 session 名稱：{archive.name}")
-        self._session_name = ""  # type: ignore[attr-defined]
-        self._update_subtitle()
+            pass
 
     def _load_session_name_from_archive(self, archive: Path) -> None:
         """從 .names.json 讀取歸檔名稱並設入 _session_name。"""
@@ -111,7 +137,12 @@ class SessionMixin:
             self._session_name = names.get(archive.name, "")  # type: ignore[attr-defined]
         except Exception:
             self._session_name = ""  # type: ignore[attr-defined]
+        self._tab_session_names[self._current_tab_id()] = self._session_name  # type: ignore[attr-defined]
         self._update_subtitle()
+
+    def _current_name_file(self) -> Path:
+        """回傳目前 agent history 所在目錄下的 .history/.current_name 路徑。"""
+        return self.agent._history_file.resolve().parent / ".history" / ".current_name"
 
     def _do_rename(self, arg: str) -> None:
         name = getattr(self, "_session_name", "")
@@ -120,6 +151,14 @@ class SessionMixin:
             self.notify(f"目前 session 名稱：{shown}\n用法：/rename <名稱>", timeout=5)
             return
         self._session_name = arg  # type: ignore[attr-defined]
+        self._tab_session_names[self._current_tab_id()] = arg  # type: ignore[attr-defined]
+        # 持久化名稱，讓重啟後也能還原
+        try:
+            _nf = self._current_name_file()
+            _nf.parent.mkdir(exist_ok=True)
+            _nf.write_text(arg, encoding="utf-8")
+        except Exception:
+            pass
         self._update_subtitle()
         self.notify(f"Session 命名為「{arg}」，歸檔時自動儲存", timeout=3)
 
@@ -147,7 +186,14 @@ class SessionMixin:
         elif self._resumed_from is not None:
             hist_file.unlink(missing_ok=True)
             self._session_name = ""  # type: ignore[attr-defined]
+            self._tab_session_names.pop(self._current_tab_id(), None)  # type: ignore[attr-defined]
+            try:
+                self._current_name_file().unlink(missing_ok=True)
+            except Exception:
+                pass
             self.notify("已清除（resume 後未新增對話，不重複歸檔）", timeout=3)
+        self._resumed_from = None
+        self._tab_resumed_from.pop(self._current_tab_id(), None)  # type: ignore[attr-defined]
         self.agent.history = []
         self.agent._rebuild_system_prompt()
         self.agent.save_history()
@@ -197,7 +243,7 @@ class SessionMixin:
             if idx is not None:
                 await self._resume_load(archives[idx])
 
-        self.push_screen(ResumeScreen(entries, archives, names_file), _on_result)
+        self.push_screen(ResumeScreen(entries, archives, names_file, self._resumed_from), _on_result)
 
     async def _resume_load(self, archive: Path) -> None:
         # 切換前先處理當前 session
@@ -230,10 +276,12 @@ class SessionMixin:
         state_file = self.agent._history_file.resolve().parent / ".history" / ".resumed_from"
         state_file.parent.mkdir(exist_ok=True)
         state_file.write_text(archive.name, encoding="utf-8")
-        await self._active_msgs().remove_children()
+        msgs = self._active_msgs()
+        await msgs.remove_children()
         self.agent.reset_history()
-        self._render_history()
+        await self._render_history_into(msgs, self.agent)
         self._resumed_from = archive
+        self._tab_resumed_from[self._current_tab_id()] = archive  # type: ignore[attr-defined]
         self._load_session_name_from_archive(archive)
         name_display = getattr(self, "_session_name", "") or archive.name
         self.notify(f"已載入：{name_display}（有新對話後才會重新歸檔）", timeout=4)
