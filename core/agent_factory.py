@@ -81,6 +81,31 @@ def list_agents() -> list[dict[str, Any]]:
     return result
 
 
+def find_agent(query: str) -> str | None:
+    """模糊比對 agent，回傳 dir name；找不到回傳 None。
+    比對順序：精確 dir → name/nickname 包含 query → query 包含 name/nickname → description 包含 query。
+    """
+    q = query.strip().lower()
+    agents = list_agents()
+    # 1. 精確 dir
+    for a in agents:
+        if a["dir"].lower() == q:
+            return a["dir"]
+    # 2. name 或 nickname 完全包含 query
+    for a in agents:
+        if q in a["name"].lower() or (a["nickname"] and q in a["nickname"].lower()):
+            return a["dir"]
+    # 3. query 包含 name 或 nickname（縮寫情況）
+    for a in agents:
+        if a["name"].lower() in q or (a["nickname"] and a["nickname"].lower() in q):
+            return a["dir"]
+    # 4. description 包含 query
+    for a in agents:
+        if a.get("description") and q in a["description"].lower():
+            return a["dir"]
+    return None
+
+
 def load_agent(name: str) -> tuple[dict[str, Any], Path]:
     """載入 agents/<name>/config.json，回傳 (data, agent_dir_path)。"""
     base = agents_dir()

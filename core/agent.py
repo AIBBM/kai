@@ -29,13 +29,14 @@ from .config import (
 from .models import ModelProfile, get_profile
 from .tools import (
     BASH_TOOL,
+    FETCH_URLS_TOOL,
+    OPEN_AGENT_TOOL,
     SEARCH_TOOL,
     bash_exec,
     clean_thinking,
     fetch_urls,
     run_tool,
     web_search,
-    FETCH_URLS_TOOL,
 )
 
 try:
@@ -479,6 +480,8 @@ class Agent:
         active_tools = []
         if self.profile.supports_tools and self.tools_map:
             active_tools.extend([SEARCH_TOOL, FETCH_URLS_TOOL, BASH_TOOL])
+            if "open_agent" in self.tools_map:
+                active_tools.append(OPEN_AGENT_TOOL)
         if self.profile.supports_tools and self.mcp_client:
             active_tools.extend(self.mcp_client.tools)
 

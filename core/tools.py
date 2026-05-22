@@ -14,6 +14,25 @@ from tenacity import (
 
 from .config import BASH_TIMEOUT, FETCH_MAX_CHARS, JINA_API_KEY, MAX_SEARCH_CHARS, SEARCH_NUM_RESULTS, SEARCH_RETRIES, SEARCH_TIMEOUT, SEARXNG_URL
 
+OPEN_AGENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "open_agent",
+        "description": (
+            "Open a specialized sub-agent tab in the UI. "
+            "Use when the user asks to switch to, open, or activate a named agent (e.g. '幫我開台股分析師'). "
+            "Pass the agent's name or a descriptive keyword as the query."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Agent name, nickname, or description keyword"},
+            },
+            "required": ["query"],
+        },
+    },
+}
+
 BASH_TOOL = {
     "type": "function",
     "function": {
