@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import signal
@@ -13,32 +12,34 @@ if TYPE_CHECKING:
     from textual.worker import Worker
 
 from loguru import logger
-from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import (
-    Collapsible,
     Footer,
     Header,
     Input,
-    Markdown,
     Static,
     TabbedContent,
     TabPane,
 )
 
 from core.agent import Agent
-from core.config import BASH_TIMEOUT, DEBUG_TOOLS, MODEL, USERNAME, get_nickname
+from core.config import DEBUG_TOOLS, MODEL, USERNAME, get_nickname
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
-from widgets.utils import _IMAGE_EXTS, _SUFFIX_TO_LANG
+from mixins.agents import AgentsMixin
+from mixins.bash import BashMixin
+from mixins.mcp import MCPMixin
+from mixins.session import SessionMixin
+from mixins.streaming import StreamingMixin
 from widgets.chat import AIMessage, CapabilityBadge, CapLabel, ConfirmCloseScreen, FileViewer, ImageBubble
 from widgets.commands import ChatCommands
 from widgets.input import ChatAutoComplete, HistoryInput
 from widgets.sidebar import ResizeHandle, Sidebar
 from widgets.tree import FileTree
+from widgets.utils import _IMAGE_EXTS, _SUFFIX_TO_LANG
 
 logger.remove()
 logger.add(
@@ -49,7 +50,6 @@ logger.add(
     format="{time:HH:mm:ss} | {level:<5} | {message}",
 )
 
-SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 PROMPT_HISTORY_FILE = Path(".prompt_history")
 # Mouse event debris that leaks into Input when Playwright/WSLg resets terminal mouse
 # tracking state. Textual consumes ESC and [ but the rest falls through as keystrokes:
@@ -90,7 +90,7 @@ def _append_prompt_history(text: str) -> None:
 
 
 async def _fetch_db_schema(mcp: MCPClient) -> str:
-    """查詢資料庫 table 清單，產生給模型的 schema hint（與 main.py 共用邏輯）。"""
+    """查詢資料庫 table 清單，產生給模型的 schema hint。"""
     sql = (
         "SELECT hypertable_name AS table_name, 'hypertable' AS type "
         "FROM timescaledb_information.hypertables "
@@ -113,7 +113,7 @@ async def _fetch_db_schema(mcp: MCPClient) -> str:
     return ""
 
 
-class ChatApp(App[None]):
+class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, App[None]):
     CSS_PATH = "app.tcss"
     COMMANDS = App.COMMANDS | {ChatCommands}
 
@@ -135,7 +135,7 @@ class ChatApp(App[None]):
         # Tooltip 掛在 Screen._tooltips 層，累積多了會干擾佈局。直接 patch 成 no-op。
         try:
             from textual.widgets._markdown import MarkdownTableCellContents
-            MarkdownTableCellContents.with_tooltip = lambda self, *a, **kw: self
+            MarkdownTableCellContents.with_tooltip = lambda self, *a, **kw: self  # noqa: ARG005
         except Exception:
             pass
         self.agent = Agent(model=MODEL)
@@ -157,6 +157,7 @@ class ChatApp(App[None]):
         self._bash_proc: asyncio.subprocess.Process | None = None
         self._bash_worker: "Worker | None" = None  # type: ignore[name-defined]
         self._resumed_from: Path | None = None  # /resume 載入的歸檔路徑，有新訊息後清除
+        self._session_name: str = ""            # 目前 session 的自訂名稱，/rename 設定
         self._last_ephemeral: list[dict] | None = None  # /ask 最後一輪的問答，/save 用
         self._agent_tabs: dict[str, Agent] = {}  # tab_id → Agent（agent factory 建立的 tabs）
         self._main_agent: Agent | None = None    # chat tab 的主 agent（切回 chat 時還原）
@@ -193,6 +194,13 @@ class ChatApp(App[None]):
         self.title = "kai"
         self.sub_title = MODEL
         self._main_agent = self.agent  # 記住主 chat agent，切回 chat tab 時還原
+        # 還原跨重啟的 resume 狀態，避免誤將 resume 後的 history.json 重複歸檔
+        _state = self.agent._history_file.resolve().parent / ".history" / ".resumed_from"
+        if _state.exists():
+            _arch = _state.parent / _state.read_text(encoding="utf-8").strip()
+            if _arch.exists():
+                self._resumed_from = _arch
+                self._load_session_name_from_archive(_arch)
         self.query_one("#prompt", HistoryInput).focus()
         self._update_prompt_title()
         self._render_history()
@@ -212,6 +220,7 @@ class ChatApp(App[None]):
             ("/mcp-reload", "重新載入 MCP servers（不需重啟）"),
             ("/mcp-add", "新增 MCP server  /mcp-add <name> <cmd> [args...]  或  /mcp-add <name> --url <url>"),
             ("/mcp-del", "移除 MCP server  /mcp-del <name>"),
+            ("/rename", "命名目前 session  /rename <名稱>"),
             ("/nickname", "查詢或設定目前模型的暱稱  /nickname [名字]"),
             ("/create-agent", "用 AI 設計新 agent  /create-agent <描述>"),
             ("/load-agent", "載入 agent 設定  /load-agent <name>"),
@@ -226,6 +235,10 @@ class ChatApp(App[None]):
     async def _render_history(self) -> None:
         """把 agent.history 渲染到 chat 視窗（啟動 / /cd 後呼叫）。"""
         msgs = self.query_one("#messages", VerticalScroll)
+        widgets: list = []
+        ai_updates: list[tuple[AIMessage, str]] = []
+        nickname = get_nickname(self.agent.profile.name)
+
         for msg in self.agent.history:
             role = msg.get("role")
             content = msg.get("content") or ""
@@ -240,24 +253,23 @@ class ChatApp(App[None]):
                 else:
                     text = content
                 if text:
-                    await msgs.mount(
-                        Static(
-                            f"[bold]{USERNAME}[/bold]\n{text}",
-                            markup=True,
-                            classes="user-bubble",
-                        )
-                    )
+                    widgets.append(Static(
+                        f"[bold]{USERNAME}[/bold]\n{text}",
+                        markup=True,
+                        classes="user-bubble",
+                    ))
             elif role == "assistant" and content:
-                await msgs.mount(
-                    Static(
-                        f"🤖 {get_nickname(self.agent.profile.name)}",
-                        classes="ai-header",
-                        markup=False,
-                    )
-                )
+                widgets.append(Static(f"🤖 {nickname}", classes="ai-header", markup=False))
                 ai_msg = AIMessage()
-                await msgs.mount(ai_msg)
-                await ai_msg.update_content(content, final=True)
+                widgets.append(ai_msg)
+                ai_updates.append((ai_msg, content))
+
+        if widgets:
+            await msgs.mount(*widgets)  # 一次 layout pass，而非 N 次
+
+        for ai_msg, content in ai_updates:
+            await ai_msg.update_content(content, final=True)
+
         msgs.scroll_end(animate=False)
 
     async def _mcp_lifecycle(self) -> None:
@@ -277,8 +289,7 @@ class ChatApp(App[None]):
             if not mcp.tool_names:
                 sidebar.set_mcp({})
                 return
-            self.agent.mcp_client = mcp
-            self.agent.mcp_context = await _fetch_db_schema(mcp)
+            ctx = await _fetch_db_schema(mcp)
             fs_paths = [
                 arg
                 for name, cfg in servers.items()
@@ -287,236 +298,25 @@ class ChatApp(App[None]):
                 if arg.startswith("/")
             ]
             if fs_paths:
-                self.agent.mcp_context += f"\n檔案系統可存取目錄：{', '.join(fs_paths)}"
+                ctx += f"\n檔案系統可存取目錄：{', '.join(fs_paths)}"
+            self.agent.mcp_client = mcp
+            self.agent.mcp_context = ctx
             self.agent._rebuild_system_prompt()
+            for _a in self._agent_tabs.values():
+                _a.mcp_client = mcp
+                _a.mcp_context = ctx
+                _a._rebuild_system_prompt()
             sidebar.set_mcp(mcp.server_summary)
             logger.info(f"MCP 初始化完成：{mcp.tool_names}")
+            assert self._mcp_done
             await self._mcp_done.wait()
         except asyncio.CancelledError:
             pass
         finally:
             self.agent.mcp_client = None
+            for _a in self._agent_tabs.values():
+                _a.mcp_client = None
             await mcp.stop()
-
-    async def _do_mcp_list(self) -> None:
-        """顯示所有已連線 MCP server 與工具說明。"""
-        from widgets.mcp_list import MCPListScreen
-        mcp = self.agent.mcp_client
-        if not mcp or not mcp.tool_names:
-            self.notify("目前沒有連線中的 MCP server", severity="warning")
-            return
-        self.push_screen(MCPListScreen(mcp.tools_by_server))
-
-    async def _do_mcp_reload(self) -> None:
-        """停止現有 MCP lifecycle，重新啟動。"""
-        self.notify("🔄 重新連線 MCP...", severity="information")
-        if self._mcp_done:
-            self._mcp_done.set()
-        if self._mcp_task and not self._mcp_task.done():
-            try:
-                await asyncio.wait_for(self._mcp_task, timeout=3.0)
-            except BaseException:
-                self._mcp_task.cancel()
-        self._mcp_done = asyncio.Event()
-        self._mcp_task = asyncio.get_event_loop().create_task(self._mcp_lifecycle())
-        self.notify("✅ MCP 重新載入完成", severity="information")
-
-    def _do_nickname(self, arg: str) -> None:
-        """查詢或設定目前模型暱稱，並寫入 .env。"""
-        from core.config import _normalize
-        model = self.agent.profile.name
-        key = f"NICKNAME_{_normalize(model)}"
-        if not arg:
-            current = get_nickname(model)
-            shown = current if current != model else "（未設定）"
-            self.notify(f"{model}\n.env key：{key}\n目前暱稱：{shown}", timeout=6)
-            return
-        env_path = Path(".env")
-        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-        replaced = False
-        for i, line in enumerate(lines):
-            if line.startswith(f"{key}=") or line.startswith(f"{key} ="):
-                lines[i] = f"{key}={arg}"
-                replaced = True
-                break
-        if not replaced:
-            lines.append(f"{key}={arg}")
-        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        import os; os.environ[key] = arg
-        self.agent._rebuild_system_prompt()
-        self.agent.save_history()
-        prompt = self.query_one("#prompt", HistoryInput)
-        prompt.placeholder = f"傳訊息給 {arg}..."
-        self.sub_title = arg
-        self.notify(f"✅ {model} 暱稱設為「{arg}」", timeout=3)
-
-    # ── Agent Factory ──────────────────────────────────────────────────────────
-
-    async def _do_create_agent(self, description: str) -> None:
-        """用 LLM 根據描述生成 agent config 並存檔。"""
-        from core.agent_factory import CREATE_AGENT_PROMPT, extract_json, save_agent, validate_agent
-        msgs = self._active_msgs()
-        await msgs.mount(Static(f"🏭 正在設計 agent：{description}", markup=False, classes="bash-output"))
-        msgs.scroll_end(animate=False)
-
-        model_list = ", ".join(REGISTRY.keys())
-        prompt_text = CREATE_AGENT_PROMPT.format(
-            description=description,
-            models=model_list,
-        )
-        try:
-            # 用一次性 ephemeral 呼叫，不污染對話歷史
-            reply_parts: list[str] = []
-            async def _collect(chunk: str) -> None:
-                reply_parts.append(chunk)
-            await self.agent.chat(
-                {"role": "user", "content": prompt_text},
-                on_token=_collect,
-                on_done=None,
-            )
-            # ephemeral: 移除剛加入的 user + assistant 訊息
-            self.agent.history = [m for m in self.agent.history if m.get("content") != prompt_text]
-            if self.agent.history and self.agent.history[-1]["role"] == "assistant":
-                self.agent.history.pop()
-
-            raw = "".join(reply_parts)
-            data = extract_json(raw)
-            missing = validate_agent(data)
-            if missing:
-                self.notify(f"LLM 回覆缺少欄位：{missing}", severity="error")
-                return
-            adir = save_agent(data)
-            await msgs.mount(Static(
-                f"✅ Agent 已建立：{data['name']}（agents/{adir.name}/）\n"
-                f"   model: {data['model']}  nickname: {data.get('nickname', '—')}\n"
-                f"   輸入 /load-agent {adir.name} 載入",
-                markup=False, classes="bash-output",
-            ))
-            msgs.scroll_end(animate=False)
-            self.query_one("#file-tree", FileTree).refresh_tree()
-        except Exception as e:
-            self.notify(f"建立失敗：{e}", severity="error")
-
-    async def _do_load_agent(self, name: str) -> None:
-        """載入 agents/<name>/config.json，在新 tab 開啟獨立 Agent 實例。"""
-        from core.agent_factory import load_agent
-        try:
-            data, adir = load_agent(name)
-        except FileNotFoundError as e:
-            self.notify(str(e), severity="error")
-            return
-
-        model = data.get("model", self.agent.profile.name)
-        if model not in REGISTRY:
-            self.notify(f"未知模型：{model}，改用 {self.agent.profile.name}", severity="warning")
-            model = self.agent.profile.name
-
-        # 建立獨立 Agent：使用 agent 專屬目錄的 history.json 與 config 的 system prompt
-        agent = Agent(
-            model=model,
-            history_file=adir / "history.json",
-            agent_dir=adir,
-            system_prompt=data["system_prompt"],
-        )
-        agent.mcp_client = self.agent.mcp_client
-        agent.mcp_context = getattr(self.agent, "mcp_context", "")
-
-        # 套用 nickname
-        nickname = data.get("nickname") or data["name"]
-        import os as _os
-        from core.config import _normalize
-        _os.environ[f"NICKNAME_{_normalize(model)}"] = nickname
-
-        # 套用 history_keep
-        if "history_keep" in data:
-            import core.agent as _agent_mod
-            _agent_mod.HISTORY_KEEP = data["history_keep"]
-
-        # 建新 tab（ID 只能用 ASCII 字元，用計數器代替 slug）
-        tab_idx = len(self._agent_tabs)
-        tab_id = f"agent-{tab_idx}"
-        scroll = VerticalScroll(id=f"msgs-agent-{tab_idx}")
-        pane = TabPane(f"🤖 {nickname} ×", scroll, id=tab_id)
-        tc = self.query_one("#center-tabs", TabbedContent)
-        await tc.add_pane(pane)
-        tc.active = tab_id
-
-        self._agent_tabs[tab_id] = agent
-        self.notify(f"✅ 已開啟 agent：{data['name']}", timeout=3)
-
-    async def _do_list_agents(self) -> None:
-        """列出 agents/ 目錄下所有 agent。"""
-        from core.agent_factory import list_agents
-        agents = list_agents()
-        msgs = self._active_msgs()
-        if not agents:
-            await msgs.mount(Static("📂 agents/ 目錄是空的，用 /create-agent 建立第一個 agent", markup=False, classes="bash-output"))
-            msgs.scroll_end(animate=False)
-            return
-        from rich.table import Table as RichTable
-        from rich.box import SIMPLE
-        tbl = RichTable(box=SIMPLE, show_header=True, expand=True, padding=(0, 1))
-        tbl.add_column("目錄", style="cyan", no_wrap=True)
-        tbl.add_column("名稱", style="bold")
-        tbl.add_column("暱稱")
-        tbl.add_column("模型", style="dim")
-        tbl.add_column("說明", style="dim")
-        for a in agents:
-            tbl.add_row(a["dir"], a["name"], a.get("nickname", "—"), a["model"], a.get("description", "—"))
-        await msgs.mount(Static(tbl))
-        msgs.scroll_end(animate=False)
-
-    async def _do_mcp_add(self, arg: str) -> None:
-        """新增 MCP server：/mcp-add <name> <command> [args...]  或  /mcp-add <name> --url <url>"""
-        if not arg:
-            self.notify("用法：/mcp-add <name> <command> [args...]  或  /mcp-add <name> --url <url>", severity="warning")
-            return
-        parts = arg.split()
-        if len(parts) < 2:
-            self.notify("用法：/mcp-add <name> <command> [args...]  或  /mcp-add <name> --url <url>", severity="warning")
-            return
-        name, *rest = parts
-        from core.config import MCP_SERVERS_FILE
-        data = {}
-        if MCP_SERVERS_FILE.exists():
-            try:
-                data = json.loads(MCP_SERVERS_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        if rest[0] == "--url":
-            if len(rest) < 2:
-                self.notify("用法：/mcp-add <name> --url <url>", severity="warning")
-                return
-            entry: dict = {"type": "http", "url": rest[1]}
-        else:
-            command, *extra_args = rest
-            entry = {"command": command, "args": extra_args}
-        data.setdefault("mcpServers", {})[name] = entry
-        MCP_SERVERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.notify(f"✅ 已新增 {name}，執行 /mcp-reload 生效", severity="information")
-
-    async def _do_mcp_del(self, arg: str) -> None:
-        """移除 MCP server：/mcp-del <name>"""
-        if not arg:
-            self.notify("用法：/mcp-del <name>", severity="warning")
-            return
-        name = arg.strip()
-        from core.config import MCP_SERVERS_FILE
-        if not MCP_SERVERS_FILE.exists():
-            self.notify("mcp_servers.json 不存在", severity="error")
-            return
-        try:
-            data = json.loads(MCP_SERVERS_FILE.read_text(encoding="utf-8"))
-        except Exception as e:
-            self.notify(f"讀取失敗：{e}", severity="error")
-            return
-        servers = data.get("mcpServers", {})
-        if name not in servers:
-            self.notify(f"找不到 server：{name}", severity="error")
-            return
-        del servers[name]
-        MCP_SERVERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.notify(f"✅ 已移除 {name}，執行 /mcp-reload 生效", severity="information")
 
     async def action_quit(self) -> None:
         if self._mcp_done:
@@ -526,19 +326,21 @@ class ChatApp(App[None]):
                 await asyncio.wait_for(self._mcp_task, timeout=2.0)
             except BaseException:
                 self._mcp_task.cancel()
-        hist = self.agent.history
-        if hist and hist[-1]["role"] == "user":
-            hist.pop()
-        self.agent.save_history()
+        # 只有串流進行中才需要在退出時存檔；正常情況 agent.chat 已在每輪末尾呼叫 save_history，
+        # 若無條件存檔會覆蓋使用者對 history.json 的手動編輯。
+        from widgets.input import HistoryInput
+        prompt = self.query_one("#prompt", HistoryInput)
+        if prompt.has_class("streaming"):
+            hist = self.agent.history
+            if hist and hist[-1]["role"] == "user":
+                hist.pop()
+            self.agent.save_history()
         if self._bash_proc and self._bash_proc.returncode is None:
             try:
                 os.killpg(os.getpgid(self._bash_proc.pid), signal.SIGTERM)
             except ProcessLookupError:
                 pass
         self.exit()
-
-    def on_unmount(self) -> None:
-        pass
 
     # ── 輸入事件 ──────────────────────────────────────────────────────────────
 
@@ -673,6 +475,8 @@ class ChatApp(App[None]):
                 await self._do_mcp_add(arg)
             elif cmd == "/mcp-del":
                 await self._do_mcp_del(arg)
+            elif cmd == "/rename":
+                self._do_rename(arg)
             elif cmd == "/nickname":
                 self._do_nickname(arg)
             elif cmd == "/create-agent":
@@ -936,473 +740,6 @@ class ChatApp(App[None]):
             return self.query_one(f"TabPane#{active}", TabPane).query_one(VerticalScroll)
         except Exception:
             return self.query_one("#messages", VerticalScroll)
-
-    async def _do_cd(self, arg: str) -> None:
-        """切換工作目錄：存舊 history → chdir → 重載新 history → 清 UI。"""
-        target = Path(self._prev_cwd if arg == "-" else arg).expanduser().resolve()
-        if not target.is_dir():
-            self.notify(f"目錄不存在：{target}", severity="error")
-            return
-        self.agent.save_history()
-        self._prev_cwd = os.getcwd()
-        os.chdir(target)
-        self.query_one("#sb-cwd", Static).update(str(target))
-        self.query_one("#file-tree", FileTree).refresh_tree()
-        self.agent.reset_history()
-        await self.query_one("#messages", VerticalScroll).remove_children()
-        self._render_history()
-        self.notify(f"已切換至 {target}", severity="information")
-
-    async def action_compact(self) -> None:
-        if not self.agent._gemini and not self.agent._deepseek:
-            self.notify("需要 GEMINI_API_KEY 或 DEEPSEEK_API_KEY 才能使用 compact", severity="warning")
-            return
-        msgs = self.query_one("#messages", VerticalScroll)
-        await msgs.mount(Static("⚡ 正在用 Gemini 壓縮對話歷史…", classes="error-msg", markup=False))
-        msgs.scroll_end(animate=False)
-        try:
-            await self.agent.compact_history()
-            await msgs.remove_children()
-            self._render_history()
-            self.notify("✅ 對話已壓縮", severity="information")
-        except Exception as e:
-            self.notify(f"compact 失敗：{e}", severity="error")
-
-    async def action_clear_screen(self) -> None:
-        await self._active_msgs().remove_children()
-
-    async def action_clear(self) -> None:
-        real_msgs = [m for m in self.agent.history if m.get("role") != "system"]
-        if not real_msgs:
-            self.notify("沒有對話記錄，無需清除", severity="information", timeout=2)
-            return
-        await self._active_msgs().remove_children()
-        hist_file = self.agent._history_file.resolve()
-        hist_dir = hist_file.parent / ".history"
-        if hist_file.exists() and self._resumed_from is None:
-            from datetime import datetime
-            hist_dir.mkdir(exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            hist_file.rename(hist_dir / f"history_{ts}.json")
-            self.notify(f"歷史已歸檔至 {hist_dir.name}/history_{ts}.json", timeout=3)
-        elif self._resumed_from is not None:
-            hist_file.unlink(missing_ok=True)
-            self.notify("已清除（resume 後未新增對話，不重複歸檔）", timeout=3)
-        self.agent.history = []
-        self.agent._rebuild_system_prompt()
-        self.agent.save_history()
-        self.sub_title = get_nickname(self.agent.profile.name)
-        self.query_one("#file-tree", FileTree).refresh_tree()
-
-    async def _handle_resume(self, arg: str) -> None:
-        import json as _json
-        hist_dir = self.agent._history_file.resolve().parent / ".history"
-        archives = sorted(hist_dir.glob("history_*.json"), reverse=True) if hist_dir.exists() else []
-        if not archives:
-            self.notify("沒有任何歸檔 session", severity="warning")
-            return
-        if not arg:
-            lines = []
-            for i, p in enumerate(archives, 1):
-                try:
-                    msgs = _json.loads(p.read_text(encoding="utf-8"))
-                    user_msgs = [m for m in msgs if m.get("role") == "user"]
-                    count = len(user_msgs)
-                    first = user_msgs[0]["content"] if user_msgs else ""
-                    if isinstance(first, list):
-                        first = next((b["text"] for b in first if b.get("type") == "text"), "")
-                    preview = str(first)[:50].replace("\n", " ")
-                    # 從檔名解析時間 history_YYYYMMDD_HHMMSS.json
-                    stem = p.stem  # history_20260520_153022
-                    try:
-                        dt = stem[8:]  # 20260520_153022
-                        ts_display = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} {dt[9:11]}:{dt[11:13]}:{dt[13:15]}"
-                    except Exception:
-                        ts_display = stem
-                except Exception:
-                    count, preview, ts_display = 0, "(無法讀取)", p.name
-                lines.append(f"[{i}] {ts_display}  {count} 則對話  {preview}…")
-            msgs_area = self._active_msgs()
-            await msgs_area.mount(Static("\n".join(lines)))
-            self.notify("/resume <編號> 載入對應 session", timeout=5)
-            return
-        try:
-            idx = int(arg) - 1
-            archive = archives[idx]
-        except (ValueError, IndexError):
-            self.notify(f"編號無效，共 {len(archives)} 個歸檔", severity="error")
-            return
-        try:
-            import shutil
-            shutil.copy2(archive, self.agent._history_file)
-        except Exception as e:
-            self.notify(f"載入失敗：{e}", severity="error")
-            return
-        self._active_msgs().remove_children()
-        self.agent.reset_history()
-        self._render_history()
-        self._resumed_from = archive
-        self.notify(f"已載入：{archive.name}（有新對話後才會重新歸檔）", timeout=4)
-
-    async def action_switch_model(self, model_name: str) -> None:
-        if model_name not in REGISTRY:
-            self.notify(f"未知模型：{model_name}", severity="error")
-            return
-        if model_name == self.agent.profile.name:
-            self.notify("已是目前模型", severity="information")
-            return
-        old_history = self.agent.history[:]
-        old_mcp = self.agent.mcp_client
-        old_ctx = getattr(self.agent, "mcp_context", "")
-        self.agent = Agent(model=model_name)
-        self.agent.history = old_history
-        self.agent.mcp_client = old_mcp
-        self.agent.mcp_context = old_ctx
-        self.agent._rebuild_system_prompt()
-        self._think_override = None
-        # 若在 chat tab 切換模型，同步更新 _main_agent
-        tc = self.query_one("#center-tabs", TabbedContent)
-        if tc.active == "chat":
-            self._main_agent = self.agent
-        self._sync_cap_bar()
-        prompt = self.query_one("#prompt", HistoryInput)
-        prompt.placeholder = f"傳訊息給 {get_nickname(model_name)}..."
-        self.sub_title = get_nickname(model_name)
-        self.query_one("#sidebar", Sidebar).set_model(model_name)
-        self.notify(f"已切換至 {model_name}", severity="information")
-
-    # ── Streaming worker ──────────────────────────────────────────────────────
-
-    @work(exclusive=True)
-    async def _send(self, text: str, images: list[str] | None = None, ephemeral: bool = False) -> None:
-        msgs = self._active_msgs()
-        prompt = self.query_one("#prompt", HistoryInput)
-        stream_msg: AIMessage | None = None
-        buf: list[str] = []
-
-        self.agent._cancelled = False
-        if not ephemeral:
-            self._resumed_from = None  # 有新訊息，解除 resume 保護
-        _history_snapshot = [m.copy() for m in self.agent.history] if ephemeral else None
-        self._spin_idx = 0
-        self._spin_label = "等待回覆"
-
-        def _tick() -> None:
-            self._spin_idx = (self._spin_idx + 1) % len(SPINNER)
-            dbg = "  [dim]🔧 debug[/dim]" if self._debug_tools else ""
-            prompt.border_title = f"{SPINNER[self._spin_idx]} {self._spin_label}{dbg}"
-
-        timer = self.set_interval(0.08, _tick)
-        prompt.add_class("streaming")
-        prompt.border_title = f"{SPINNER[0]} 等待回覆"
-        prompt.disabled = True
-        prompt.placeholder = ""
-
-        try:
-
-            def _at_bottom() -> bool:
-                return msgs.scroll_y >= msgs.max_scroll_y - 3
-
-            _last_render: float = 0.0
-
-            async def on_thinking(content: str) -> None:
-                self._spin_label = "思考中"
-                preview = content[:2000] + ("…" if len(content) > 2000 else "")
-                await msgs.mount(
-                    Collapsible(
-                        Static(preview, markup=False),
-                        title="💡 思考過程",
-                        collapsed=True,
-                        classes="thinking",
-                    )
-                )
-                msgs.scroll_end(animate=False)
-
-            async def on_token(chunk: str) -> None:
-                nonlocal stream_msg, _last_render
-                self._spin_label = "生成中"
-                buf.append(chunk)
-                if stream_msg is None:
-                    await msgs.mount(Static(f"🤖 {get_nickname(self.agent.profile.name)}", classes="ai-header", markup=False))
-                    stream_msg = AIMessage()
-                    await msgs.mount(stream_msg)
-                now = asyncio.get_event_loop().time()
-                if now - _last_render >= 0.1:
-                    _last_render = now
-                    content = "".join(buf)
-                    idx = content.find("<next>")
-                    if idx != -1:
-                        content = content[:idx].rstrip()
-                    await stream_msg.update_content(content)
-                    if _at_bottom():
-                        msgs.scroll_end(animate=False)
-
-            async def on_done(elapsed, thinking_s, gen_tok, prompt_tok) -> None:
-                _display = re.sub(r"\s*<next>.*?</next>\s*$", "", "".join(buf), flags=re.DOTALL).rstrip()
-                if stream_msg:
-                    await stream_msg.update_content(_display, final=True)
-                elif not buf:
-                    await msgs.mount(
-                        Static(
-                            "🤖 [dim]（已完成，無文字回覆）[/dim]",
-                            markup=True,
-                            classes="ai-header",
-                        )
-                    )
-                parts: list[str] = []
-                if thinking_s:
-                    parts.append(f"思考 {thinking_s:.1f}s")
-                parts.append(f"共 {elapsed:.1f}s")
-                if gen_tok:
-                    parts.append(f"{gen_tok} tokens")
-                if prompt_tok:
-                    if self.agent.profile.backend == "ollama":
-                        num_ctx = self.agent.profile.num_ctx
-                        pct = prompt_tok * 100 // num_ctx
-                        parts.append(f"ctx {pct}% ({prompt_tok}/{num_ctx})")
-                    else:
-                        parts.append(f"輸入 {prompt_tok} tokens")
-                cache_hit = self.agent._last_cache_hit
-                if cache_hit is not None and prompt_tok:
-                    hit_pct = cache_hit * 100 // prompt_tok
-                    parts.append(f"cache {hit_pct}%")
-                stats = " · ".join(parts)
-                at_bot = _at_bottom()
-                await msgs.mount(Static(stats, classes="stats", markup=False))
-                self.sub_title = f"{get_nickname(self.agent.profile.name)} · {stats}"
-                self.query_one("#sidebar", Sidebar).refresh_git()
-                self.query_one("#file-tree", FileTree).refresh_tree()
-                if at_bot:
-                    msgs.scroll_end(animate=False)
-            async def on_tool_call(name: str, args: dict, result: str) -> None:
-                nonlocal stream_msg, buf
-                self._spin_label = "工具回應中"
-                # 工具卡出現前先把目前的回覆定稿，讓下一輪在工具卡之後建新的 AIMessage
-                if stream_msg and buf:
-                    _pre = re.sub(r"\s*<next>.*?</next>\s*$", "", "".join(buf), flags=re.DOTALL).rstrip()
-                    await stream_msg.update_content(_pre, final=True)
-                stream_msg = None
-                buf.clear()
-                # 只比對工具層自己產生的錯誤前綴，避免檔案內容含 "error" 字串誤判
-                _ERR_PREFIXES = (
-                    "[MCP Error]",
-                    "[Error]",
-                    "[ValidationError]",
-                    "[stderr]",
-                    "Traceback (most recent call last)",
-                )
-                _exit_m = __import__("re").search(r"\[exit code (\d+)\]", result)
-                _exit_code = int(_exit_m.group(1)) if _exit_m else 0
-                is_err = _exit_code >= 2 or any(kw in result for kw in _ERR_PREFIXES)
-                is_warn = not is_err and _exit_code == 1
-                # 檔案系統變更工具：成功時刷新檔案樹
-                _FS_MUTATING = {"write_file", "create_directory", "move_file", "delete_file", "edit_file"}
-                if not is_err and not is_warn and name in _FS_MUTATING:
-                    self.query_one("#file-tree", FileTree).refresh_tree()
-                icon = "❌" if is_err else ("⚠️" if is_warn else "🔧")
-                card_class = "tool-debug tool-debug-error" if is_err else "tool-debug"
-                if not self._debug_tools:
-                    if is_err:
-                        args_preview = json.dumps(args, ensure_ascii=False)
-                        if len(args_preview) > 300:
-                            args_preview = args_preview[:300] + "…"
-                        body = f"參數：{args_preview}\n\n{result[:600]}"
-                        await msgs.mount(
-                            Collapsible(
-                                Static(body, markup=False),
-                                title=f"{icon} {name}  [dim]工具錯誤[/dim]",
-                                collapsed=True,
-                                classes=card_class,
-                            )
-                        )
-                        if _at_bottom():
-                            msgs.scroll_end(animate=False)
-                    return
-                args_str = json.dumps(args, ensure_ascii=False, indent=2)
-                cap = 1000
-                result_preview = result[:cap] + (
-                    f"\n…（共 {len(result)} 字元）" if len(result) > cap else ""
-                )
-                body = f"**參數**\n```json\n{args_str}\n```\n\n**回應**\n```\n{result_preview}\n```"
-                at_bot = _at_bottom()
-                await msgs.mount(
-                    Collapsible(
-                        Markdown(body),
-                        title=f"{icon} {name}",
-                        collapsed=not is_err,
-                        classes=card_class,
-                    )
-                )
-                if at_bot:
-                    msgs.scroll_end(animate=False)
-
-            async def on_retry() -> None:
-                nonlocal stream_msg, buf
-                buf.clear()
-                if stream_msg:
-                    await stream_msg.update_content("")
-
-            self.agent.profile.supports_thinking = self._thinking_active()
-            user_msg: dict = {"role": "user", "content": text}
-            if images:
-                user_msg["images"] = images
-            await self.agent.chat(
-                user_msg,
-                on_token=on_token,
-                on_thinking=on_thinking,
-                on_done=on_done,
-                on_tool_call=on_tool_call,
-                on_retry=on_retry,
-            )
-
-        except Exception as e:
-            err_str = str(e).lower()
-            if any(kw in err_str for kw in ("context", "too long", "window", "kv cache")) and (self.agent._gemini or self.agent._deepseek):
-                # Context overflow → auto compact via gemini-2.0-flash，然後重試
-                logger.warning(f"context overflow，啟動 autocompact：{e}")
-                try:
-                    await msgs.mount(Static("⚡ Context 已滿，正在用 Gemini 壓縮對話歷史…", classes="error-msg", markup=False))
-                    msgs.scroll_end(animate=False)
-                    await self.agent.compact_history()
-                    logger.info("autocompact 完成，重試對話")
-                    await msgs.mount(Static("✅ 已壓縮，繼續對話", classes="error-msg", markup=False))
-                    msgs.scroll_end(animate=False)
-                    stream_msg = None
-                    buf.clear()
-                    await self.agent.chat(
-                        user_msg,
-                        on_token=on_token,
-                        on_thinking=on_thinking,
-                        on_done=on_done,
-                        on_tool_call=on_tool_call,
-                        on_retry=on_retry,
-                    )
-                    if stream_msg and buf:
-                        await stream_msg.update_content("".join(buf), final=True)
-                except Exception as e2:
-                    logger.exception("compact + retry error")
-                    await msgs.mount(Static(f"❌ 壓縮後仍失敗：{e2}", classes="error-msg", markup=False))
-                    msgs.scroll_end(animate=False)
-            elif isinstance(e, TimeoutError):
-                logger.error(f"Ollama stream timeout：{e}")
-                await msgs.mount(Static(f"⏱ Ollama 無回應（逾時）：{e}", classes="error-msg", markup=False))
-                msgs.scroll_end(animate=False)
-            else:
-                logger.exception("chat error")
-                await msgs.mount(Static(f"❌ 錯誤：{e}", classes="error-msg", markup=False))
-                msgs.scroll_end(animate=False)
-
-        finally:
-            timer.stop()
-            prompt.remove_class("streaming")
-            self._update_prompt_title()
-            prompt.disabled = False
-            prompt.placeholder = f"傳訊息給 {get_nickname(self.agent.profile.name)}..."
-            prompt.focus()
-            if ephemeral and _history_snapshot is not None:
-                new_msgs = self.agent.history[len(_history_snapshot):]
-                self._last_ephemeral = new_msgs if new_msgs else None
-                self.agent.history = _history_snapshot
-                self.agent.save_history()
-                if self._last_ephemeral:
-                    self.notify("💾 /save 可將此回答存入對話歷史", timeout=4)
-
-        if not ephemeral:
-            prediction = self.agent.last_prediction
-            if prediction:
-                prompt.show_prediction(prediction)
-
-    # ── Bash 直接執行 ─────────────────────────────────────────────────────────
-
-    @work
-    async def _run_bash(self, cmd: str) -> None:
-        stripped = cmd.strip()
-        if (
-            stripped == "cd"
-            or stripped.startswith("cd ")
-            or stripped.startswith("cd\t")
-        ):
-            arg = stripped[2:].strip() or str(Path.home())
-            try:
-                await self._do_cd(arg)
-            except Exception as e:
-                self.notify(f"切換失敗：{e}", severity="error")
-            return
-
-        msgs = self.query_one("#messages", VerticalScroll)
-        prompt = self.query_one("#prompt", HistoryInput)
-        await msgs.mount(
-            Static(f"[bold]$[/bold] {cmd}", markup=True, classes="user-bubble")
-        )
-        msgs.scroll_end(animate=False)
-        prompt.disabled = True
-        prompt.add_class("streaming")
-        prompt.border_title = "⚙ 執行中..."
-        try:
-            env = {
-                **os.environ,
-                "CLICOLOR_FORCE": "1",
-                "COLORTERM": "truecolor",
-                "TERM": "xterm-256color",
-                "COLUMNS": "120",
-            }
-            proc = await asyncio.create_subprocess_exec(
-                "/bin/bash", "-c", cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                start_new_session=True,
-            )
-            self._bash_proc = proc
-            out_widget = Static(Text(""), markup=False, classes="bash-output")
-            await msgs.mount(out_widget)
-            lines: list[str] = []
-
-            def _refresh() -> None:
-                raw = "".join(lines) or "(no output)"
-                try:
-                    out_widget.update(Text.from_ansi(raw))
-                except Exception:
-                    out_widget.update(Text(raw))
-                msgs.scroll_end(animate=False)
-
-            async def _read(stream: asyncio.StreamReader, prefix: str = "") -> None:
-                async for line in stream:
-                    lines.append(prefix + line.decode(errors="replace"))
-                    _refresh()
-
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(
-                        _read(proc.stdout),
-                        _read(proc.stderr, "[stderr] "),
-                        proc.wait(),
-                    ),
-                    timeout=BASH_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                await proc.communicate()
-                lines.append(f"\n⏱ 逾時（>{BASH_TIMEOUT}s）")
-                _refresh()
-        except Exception as e:
-            await msgs.mount(
-                Static(f"❌ {e or type(e).__name__}", markup=False, classes="error-msg")
-            )
-        finally:
-            msgs.scroll_end(animate=False)
-            prompt.disabled = False
-            prompt.remove_class("streaming")
-            self._update_prompt_title()
-            prompt.placeholder = f"傳訊息給 {get_nickname(self.agent.profile.name)}..."
-            prompt.focus()
-            self._bash_proc = None
-            self._bash_worker = None
-            self.query_one("#sidebar", Sidebar).refresh_git()
-            self.query_one("#file-tree", FileTree).refresh_tree()
 
     def action_cancel_stream(self) -> None:
         self.agent._cancelled = True

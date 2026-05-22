@@ -65,6 +65,7 @@ class Agent:
         self._history_file: Path = history_file or HISTORY_FILE
         # 固定 system prompt（agent factory 建立的 agent 用此代替通用重建邏輯）
         self._custom_system_prompt: str | None = system_prompt
+        self.history_keep: int = HISTORY_KEEP
         self._ollama = ollama.AsyncClient()
         self._gemini: AsyncOpenAI | None = (
             AsyncOpenAI(
@@ -306,7 +307,7 @@ class Agent:
         """保留 system message + 最近 HISTORY_KEEP 則訊息。"""
         system = [m for m in self.history if m["role"] == "system"]
         rest = [m for m in self.history if m["role"] != "system"]
-        return system + rest[-HISTORY_KEEP:]
+        return system + (rest[-self.history_keep:] if self.history_keep else [])
 
     def _trim_tool_result(self, content: str) -> str:
         """HTML 去標簽；超長截斷。"""
@@ -543,9 +544,11 @@ class Agent:
                 _full_reply = "".join(reply_parts)
                 _next_m = re.search(r"\s*<next>(.*?)</next>\s*$", _full_reply, re.DOTALL)
                 if _next_m:
-                    self.last_prediction = _next_m.group(1).strip()
+                    predicted = _next_m.group(1).strip()
                     _full_reply = _full_reply[: _next_m.start()].rstrip()
-                    logger.debug(f"<next> extracted: {repr(self.last_prediction)}")
+                    # 超過 50 字代表模型把回覆內容誤放進 <next>，不顯示為 ghost text
+                    self.last_prediction = predicted if len(predicted) <= 50 else ""
+                    logger.debug(f"<next> extracted ({len(predicted)}): {repr(predicted)}")
                 else:
                     self.last_prediction = ""
                     logger.debug(f"<next> not found, reply tail: {repr(_full_reply[-80:])}")
@@ -629,7 +632,5 @@ class Agent:
                 if on_tool_call:
                     # TUI mode: raise so _send() can show error widget
                     raise RuntimeError(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，對話強制結束")
-                self.console.print(
-                    f"[bold red]⚠️ 已達工具呼叫上限 {MAX_TOOL_CALLS} 次，強制結束[/bold red]"
-                )
+                logger.warning(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，強制結束")
                 return
