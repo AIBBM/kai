@@ -3,19 +3,34 @@ from __future__ import annotations
 
 import os
 
+from textual import work
 from textual.containers import VerticalScroll
 from textual.widgets import Static, TabbedContent, TabPane
 
 from core.agent import Agent
-from core.config import _normalize
+from core.config import _normalize, get_nickname
 from core.models import REGISTRY
+from mixins.streaming import SPINNER
+from widgets.input import HistoryInput
 from widgets.tree import FileTree
 
 
 class AgentsMixin:
+    @work(exclusive=True)
     async def _do_create_agent(self, description: str) -> None:
         from core.agent_factory import CREATE_AGENT_PROMPT, extract_json, save_agent, validate_agent
         msgs = self._active_msgs()
+        prompt = self.query_one("#prompt", HistoryInput)
+        prompt.disabled = True
+        prompt.border_title = f"{SPINNER[0]} 設計 agent 中…"
+        _spin_idx = 0
+
+        def _tick() -> None:
+            nonlocal _spin_idx
+            _spin_idx = (_spin_idx + 1) % len(SPINNER)
+            prompt.border_title = f"{SPINNER[_spin_idx]} 設計 agent 中…"
+
+        timer = self.set_interval(0.08, _tick)
         await msgs.mount(Static(f"🏭 正在設計 agent：{description}", markup=False, classes="bash-output"))
         msgs.scroll_end(animate=False)
         model_list = ", ".join(REGISTRY.keys())
@@ -48,8 +63,13 @@ class AgentsMixin:
         except Exception as e:
             self.notify(f"建立失敗：{e}", severity="error")
         finally:
+            timer.stop()
             self.agent.history = _history_snapshot
             self.agent.save_history()
+            prompt.disabled = False
+            self._update_prompt_title()
+            prompt.placeholder = f"傳訊息給 {get_nickname(self.agent.profile.name)}..."
+            prompt.focus()
 
     async def _do_load_agent(self, name: str) -> None:
         from core.agent_factory import load_agent

@@ -519,7 +519,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                 if not arg:
                     self.notify("用法：/create-agent <描述>", severity="warning")
                 else:
-                    await self._do_create_agent(arg)
+                    self._do_create_agent(arg)
             elif cmd == "/load-agent":
                 if not arg:
                     self.notify("用法：/load-agent <name>", severity="warning")
