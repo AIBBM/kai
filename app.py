@@ -164,6 +164,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         self._agent_tabs: dict[str, Agent] = {}  # tab_id → Agent（agent factory 建立的 tabs）
         self._main_agent: Agent | None = None    # chat tab 的主 agent（切回 chat 時還原）
         self._pending_open_agent: str | None = None  # open_agent 工具排程，_send finally 執行
+        self._tts_task: "asyncio.Task | None" = None  # 目前播放中的 TTS task，新回覆時取消舊的
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)

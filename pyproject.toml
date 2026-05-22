@@ -17,6 +17,9 @@ dependencies = [
     "textual-autocomplete>=4.0.6",
     "ollama>=0.6.2",
     "pillow>=12.2.0",
+    "edge-tts>=7.2.8",
+    "kokoro-onnx>=0.5.0",
+    "soundfile>=0.13.1",
 ]
 
 [dependency-groups]

@@ -19,8 +19,15 @@ from widgets.input import HistoryInput
 from widgets.sidebar import Sidebar
 from widgets.tree import FileTree
 
+from typing import TYPE_CHECKING
 
-class SessionMixin:
+if TYPE_CHECKING:
+    from app import ChatApp as _MixinBase
+else:
+    _MixinBase = object  # type: ignore[assignment,misc]
+
+
+class SessionMixin(_MixinBase):
     def _do_nickname(self, arg: str) -> None:
         model = self.agent.profile.name
         key = f"NICKNAME_{_normalize(model)}"
@@ -57,10 +64,10 @@ class SessionMixin:
         self._prev_cwd = os.getcwd()
         os.chdir(target)
         # reset session state for new directory
-        self._resumed_from = None  # type: ignore[attr-defined]
-        self._tab_resumed_from["chat"] = None  # type: ignore[attr-defined]
-        self._session_name = ""  # type: ignore[attr-defined]
-        self._tab_session_names.pop("chat", None)  # type: ignore[attr-defined]
+        self._resumed_from = None
+        self._tab_resumed_from["chat"] = None
+        self._session_name = ""
+        self._tab_session_names.pop("chat", None)
         # check if new directory has a persisted resume state
         _state = self.agent._history_file.resolve().parent / ".history" / ".resumed_from"
         if _state.exists():
@@ -120,8 +127,8 @@ class SessionMixin:
                 names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception:
                 logger.warning(f"無法儲存 session 名稱：{archive.name}")
-            self._session_name = ""  # type: ignore[attr-defined]
-            self._tab_session_names.pop(self._current_tab_id(), None)  # type: ignore[attr-defined]
+            self._session_name = ""
+            self._tab_session_names.pop(self._current_tab_id(), None)
             self._update_subtitle()
         # 名稱已歸入 .names.json，刪除暫存的 .current_name
         try:
@@ -134,10 +141,10 @@ class SessionMixin:
         names_file = archive.parent / ".names.json"
         try:
             names: dict = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
-            self._session_name = names.get(archive.name, "")  # type: ignore[attr-defined]
+            self._session_name = names.get(archive.name, "")
         except Exception:
-            self._session_name = ""  # type: ignore[attr-defined]
-        self._tab_session_names[self._current_tab_id()] = self._session_name  # type: ignore[attr-defined]
+            self._session_name = ""
+        self._tab_session_names[self._current_tab_id()] = self._session_name
         self._update_subtitle()
 
     def _current_name_file(self) -> Path:
@@ -150,8 +157,8 @@ class SessionMixin:
             shown = name or "（未命名）"
             self.notify(f"目前 session 名稱：{shown}\n用法：/rename <名稱>", timeout=5)
             return
-        self._session_name = arg  # type: ignore[attr-defined]
-        self._tab_session_names[self._current_tab_id()] = arg  # type: ignore[attr-defined]
+        self._session_name = arg
+        self._tab_session_names[self._current_tab_id()] = arg
         # 持久化名稱，讓重啟後也能還原
         try:
             _nf = self._current_name_file()
@@ -185,15 +192,15 @@ class SessionMixin:
             self.notify(f"歷史已歸檔至 {hist_dir.name}/{archive.name}", timeout=3)
         elif self._resumed_from is not None:
             hist_file.unlink(missing_ok=True)
-            self._session_name = ""  # type: ignore[attr-defined]
-            self._tab_session_names.pop(self._current_tab_id(), None)  # type: ignore[attr-defined]
+            self._session_name = ""
+            self._tab_session_names.pop(self._current_tab_id(), None)
             try:
                 self._current_name_file().unlink(missing_ok=True)
             except Exception:
                 pass
             self.notify("已清除（resume 後未新增對話，不重複歸檔）", timeout=3)
         self._resumed_from = None
-        self._tab_resumed_from.pop(self._current_tab_id(), None)  # type: ignore[attr-defined]
+        self._tab_resumed_from.pop(self._current_tab_id(), None)
         self.agent.history = []
         self.agent._rebuild_system_prompt()
         self.agent.save_history()
@@ -265,7 +272,7 @@ class SessionMixin:
         elif self._resumed_from is not None and hist_file.exists():
             # resume 後未新增訊息直接切換 → 刪除，不重複歸檔
             hist_file.unlink(missing_ok=True)
-            self._session_name = ""  # type: ignore[attr-defined]
+            self._session_name = ""
 
         try:
             shutil.copy2(archive, self.agent._history_file)
@@ -281,7 +288,7 @@ class SessionMixin:
         self.agent.reset_history()
         await self._render_history_into(msgs, self.agent)
         self._resumed_from = archive
-        self._tab_resumed_from[self._current_tab_id()] = archive  # type: ignore[attr-defined]
+        self._tab_resumed_from[self._current_tab_id()] = archive
         self._load_session_name_from_archive(archive)
         name_display = getattr(self, "_session_name", "") or archive.name
         self.notify(f"已載入：{name_display}（有新對話後才會重新歸檔）", timeout=4)

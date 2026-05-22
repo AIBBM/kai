@@ -14,9 +14,15 @@ from mixins.streaming import SPINNER
 from widgets.input import HistoryInput
 from widgets.tree import FileTree
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app import ChatApp as _MixinBase
+else:
+    _MixinBase = object  # type: ignore[assignment,misc]
 
 
-class AgentsMixin:
+class AgentsMixin(_MixinBase):
     @work(exclusive=True)
     async def _do_create_agent(self, description: str) -> None:
         from core.agent_factory import CREATE_AGENT_PROMPT, extract_json, save_agent, validate_agent
@@ -98,11 +104,11 @@ class AgentsMixin:
         # TTS config：True → 預設設定，dict → 自訂 voice/player
         tts_raw = data.get("tts")
         if tts_raw is True:
-            agent._tts_config = {"voice": "en-US-AriaNeural"}  # type: ignore[attr-defined]
+            agent._tts_config = {"voice": "en-US-AriaNeural"}
         elif isinstance(tts_raw, dict) and tts_raw:
-            agent._tts_config = tts_raw  # type: ignore[attr-defined]
+            agent._tts_config = tts_raw
         else:
-            agent._tts_config = None  # type: ignore[attr-defined]
+            agent._tts_config = None
         tab_idx = len(self._agent_tabs)
         tab_id = f"agent-{tab_idx}"
         scroll = VerticalScroll(id=f"msgs-agent-{tab_idx}")
@@ -170,9 +176,10 @@ class AgentsMixin:
         finally:
             timer.stop()
             prompt.disabled = False
-            self._update_prompt_title()
-            prompt.placeholder = f"傳訊息給 {get_nickname(agent.profile.name)}..."
-            prompt.focus()
+            if self.agent is agent:
+                self._update_prompt_title()
+                prompt.placeholder = f"傳訊息給 {get_nickname(agent.profile.name)}..."
+                prompt.focus()
 
     async def _do_list_agents(self) -> None:
         from core.agent_factory import list_agents

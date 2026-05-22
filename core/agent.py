@@ -55,6 +55,7 @@ class Agent:
         self.mcp_context: str = ""
         self.last_prediction: str = ""
         self._cancelled = False
+        self._tts_config: dict | None = None  # 由 _do_load_agent 注入；None 表示不啟用 TTS
         # agent 專屬目錄（存 history.json / AGENT_NOTES.md；None 表示用 cwd）
         self._agent_dir: "Path | None" = agent_dir
         self._history_file: Path = history_file or HISTORY_FILE
@@ -407,7 +408,6 @@ class Agent:
                     logger.debug(f"<next> extracted ({len(predicted)}): {repr(predicted)}")
                 else:
                     self.last_prediction = ""
-                    logger.debug(f"<next> not found, reply tail: {repr(_full_reply[-80:])}")
                 assistant_msg: dict = {"role": "assistant", "content": _full_reply}
                 if self.profile.backend == "deepseek" and thinking_parts:
                     assistant_msg["reasoning_content"] = "".join(thinking_parts)

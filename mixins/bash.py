@@ -16,8 +16,15 @@ from widgets.input import HistoryInput
 from widgets.sidebar import Sidebar
 from widgets.tree import FileTree
 
+from typing import TYPE_CHECKING
 
-class BashMixin:
+if TYPE_CHECKING:
+    from app import ChatApp as _MixinBase
+else:
+    _MixinBase = object  # type: ignore[assignment,misc]
+
+
+class BashMixin(_MixinBase):
     @work
     async def _run_bash(self, cmd: str) -> None:
         stripped = cmd.strip()

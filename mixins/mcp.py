@@ -3,9 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app import ChatApp as _MixinBase
+else:
+    _MixinBase = object  # type: ignore[assignment,misc]
 
 
-class MCPMixin:
+class MCPMixin(_MixinBase):
     async def _do_mcp_list(self) -> None:
         from widgets.mcp_list import MCPListScreen
         mcp = self.agent.mcp_client

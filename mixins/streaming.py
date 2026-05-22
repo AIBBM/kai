@@ -15,10 +15,17 @@ from widgets.input import HistoryInput
 from widgets.sidebar import Sidebar
 from widgets.tree import FileTree
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app import ChatApp as _MixinBase
+else:
+    _MixinBase = object  # type: ignore[assignment,misc]
+
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
-class StreamingMixin:
+class StreamingMixin(_MixinBase):
     @work(exclusive=True)
     async def _send(self, text: str, images: list[str] | None = None, ephemeral: bool = False) -> None:
         msgs = self._active_msgs()
@@ -125,14 +132,19 @@ class StreamingMixin:
                 self.query_one("#file-tree", FileTree).refresh_tree()
                 if at_bot:
                     msgs.scroll_end(animate=False)
-                # TTS：若 agent config 有啟用，背景播放
+                # TTS：整段回覆完成後一次播放，取消前一個避免疊加
                 _tts_cfg = getattr(self.agent, "_tts_config", None)
-                if _tts_cfg and _display:
+                if _tts_cfg and _display and not ephemeral:
                     from core.tts import speak
-                    asyncio.create_task(speak(
+                    _prev = getattr(self, "_tts_task", None)
+                    if _prev and not _prev.done():
+                        _prev.cancel()
+                    self._tts_task = asyncio.create_task(speak(
                         _display,
                         voice=_tts_cfg.get("voice", "en-US-AriaNeural"),
                         player=_tts_cfg.get("player", "auto"),
+                        engine=_tts_cfg.get("engine", "edge-tts"),
+                        lang=_tts_cfg.get("lang", "en-us"),
                     ))
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
@@ -258,5 +270,5 @@ class StreamingMixin:
                 prompt.show_prediction(prediction)
             _pending = getattr(self, "_pending_open_agent", None)
             if _pending:
-                self._pending_open_agent = None  # type: ignore[attr-defined]
+                self._pending_open_agent = None
                 await self._do_load_agent(_pending)
