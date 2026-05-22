@@ -5,13 +5,12 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 
-import httpx
 import ollama
-from openai import AsyncOpenAI
 from loguru import logger
+from openai import AsyncOpenAI
 
+from .backends import stream_ollama, stream_openai_compat
 from .config import (
     DEEPSEEK_API_KEY,
     GEMINI_API_KEY,
@@ -20,10 +19,6 @@ from .config import (
     MAX_SEARCH_CHARS,
     MAX_TOOL_CALLS,
     NUM_CTX,
-    OLLAMA_STREAM_TIMEOUT,
-    TEMPERATURE,
-    TOP_K,
-    TOP_P,
     USERNAME,
 )
 from .models import ModelProfile, get_profile
@@ -33,7 +28,6 @@ from .tools import (
     OPEN_AGENT_TOOL,
     SEARCH_TOOL,
     bash_exec,
-    clean_thinking,
     fetch_urls,
     run_tool,
     web_search,
@@ -321,147 +315,6 @@ class Agent:
             )
         return content
 
-    async def _stream_ollama(
-        self, messages, active_tools, reply_parts, tool_calls, thinking_parts,
-        on_token, on_thinking, on_retry,
-    ) -> None:
-        """Ollama 串流，含 XML 解析錯誤自動重試。"""
-        _xml_retry = 0
-        _XML_RETRY_MAX = 2
-        while True:
-            try:
-                stream = await self._ollama.chat(
-                    model=self.profile.name,
-                    messages=messages,
-                    think=self.profile.supports_thinking,
-                    tools=active_tools,
-                    stream=True,
-                    options={"num_ctx": self.profile.num_ctx, "temperature": TEMPERATURE, "top_k": TOP_K, "top_p": TOP_P},
-                )
-            except httpx.ConnectError:
-                raise
-
-            try:
-                _it = stream.__aiter__()
-                while True:
-                    try:
-                        chunk = await asyncio.wait_for(_it.__anext__(), timeout=OLLAMA_STREAM_TIMEOUT)
-                    except StopAsyncIteration:
-                        break
-                    except asyncio.TimeoutError:
-                        raise asyncio.TimeoutError(f"Ollama 超過 {OLLAMA_STREAM_TIMEOUT}s 未回應，可能已卡住")
-                    if self._cancelled:
-                        break
-                    msg = chunk.message
-                    self._last_usage = (getattr(chunk, "eval_count", None), getattr(chunk, "prompt_eval_count", None))
-
-                    if msg.thinking:
-                        thinking_parts.append(clean_thinking(msg.thinking))
-
-                    if msg.content:
-                        if not reply_parts and thinking_parts:
-                            self._t_thinking_end = time.perf_counter()
-                            if on_thinking:
-                                await on_thinking("".join(thinking_parts))
-                        reply_parts.append(msg.content)
-                        if on_token:
-                            await on_token(msg.content)
-
-                    for tc in msg.tool_calls or []:
-                        tool_calls.append(tc)
-                return
-
-            except ollama.ResponseError as e:
-                if "XML syntax error" in str(e) and _xml_retry < _XML_RETRY_MAX:
-                    _xml_retry += 1
-                    logger.warning(f"XML 解析錯誤，第 {_xml_retry}/{_XML_RETRY_MAX} 次重試：{e}")
-                    reply_parts.clear()
-                    tool_calls.clear()
-                    thinking_parts.clear()
-                    if on_retry:
-                        await on_retry()
-                    continue
-                raise
-
-    async def _stream_openai_compat(
-        self, client: AsyncOpenAI, messages, active_tools, reply_parts, tool_calls, thinking_parts,
-        on_token, on_thinking,
-    ) -> None:
-        """OpenAI-compatible 串流（Gemini / DeepSeek）。"""
-        from openai import NOT_GIVEN, RateLimitError
-        is_deepseek = self.profile.backend == "deepseek"
-        extra: dict = {}
-        if is_deepseek and self.profile.supports_thinking:
-            extra["extra_body"] = {"thinking": {"type": "enabled"}}
-            extra["reasoning_effort"] = "high"
-        elif is_deepseek:
-            extra["extra_body"] = {"thinking": {"type": "disabled"}}
-        try:
-            stream = await client.chat.completions.create(
-                model=self.profile.name,
-                messages=messages,
-                tools=active_tools or NOT_GIVEN,
-                temperature=TEMPERATURE,
-                top_p=TOP_P,
-                stream=True,
-                stream_options={"include_usage": True},
-                **extra,
-            )
-        except RateLimitError as e:
-            logger.warning(f"API 配額不足（{self.profile.backend}）：{e}")
-            raise RuntimeError(f"❌ API 配額已用盡，請稍後再試。\n{e}") from e
-
-        _tc_buf: dict[int, dict] = {}
-
-        async for chunk in stream:
-            if self._cancelled:
-                break
-            if chunk.usage:
-                self._last_usage = (chunk.usage.completion_tokens, chunk.usage.prompt_tokens)
-                # prompt_cache_hit_tokens 只有 DeepSeek 會回傳，Gemini 沒有此欄位
-                hit = getattr(chunk.usage, "prompt_cache_hit_tokens", None)
-                if hit is None and getattr(chunk.usage, "model_extra", None):
-                    hit = chunk.usage.model_extra.get("prompt_cache_hit_tokens")
-                if hit is not None:
-                    self._last_cache_hit = hit
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-
-            # DeepSeek 思考內容在 reasoning_content（非標準欄位）
-            reasoning = getattr(delta, "reasoning_content", None) or (
-                delta.model_extra.get("reasoning_content")
-                if getattr(delta, "model_extra", None)
-                else None
-            )
-            if reasoning:
-                thinking_parts.append(reasoning)
-
-            if delta.content:
-                if not reply_parts and thinking_parts:
-                    self._t_thinking_end = time.perf_counter()
-                    if on_thinking:
-                        await on_thinking("".join(thinking_parts))
-                reply_parts.append(delta.content)
-                if on_token:
-                    await on_token(delta.content)
-
-            for tc_chunk in (delta.tool_calls or []):
-                i = tc_chunk.index
-                if i not in _tc_buf:
-                    _tc_buf[i] = {"id": tc_chunk.id or "", "name": "", "args": ""}
-                if tc_chunk.function:
-                    _tc_buf[i]["name"] += tc_chunk.function.name or ""
-                    _tc_buf[i]["args"] += tc_chunk.function.arguments or ""
-
-        for idx in sorted(_tc_buf):
-            d = _tc_buf[idx]
-            tc = SimpleNamespace(
-                id=d["id"],
-                function=SimpleNamespace(name=d["name"], arguments=d["args"]),
-            )
-            tool_calls.append(tc)
-
     async def chat(self, user_msg: dict, on_token=None, on_thinking=None, on_done=None, on_tool_call=None, on_retry=None):
         """
         單輪對話入口，支援 tool calling loop：
@@ -499,13 +352,13 @@ class Agent:
             try:
                 if self.profile.backend in ("gemini", "deepseek"):
                     _client = self._gemini if self.profile.backend == "gemini" else self._deepseek
-                    await self._stream_openai_compat(
-                        _client, messages, active_tools, reply_parts, tool_calls, thinking_parts,
+                    await stream_openai_compat(
+                        self, _client, messages, active_tools, reply_parts, tool_calls, thinking_parts,
                         on_token, on_thinking,
                     )
                 else:
-                    await self._stream_ollama(
-                        messages, active_tools, reply_parts, tool_calls, thinking_parts,
+                    await stream_ollama(
+                        self, messages, active_tools, reply_parts, tool_calls, thinking_parts,
                         on_token, on_thinking, on_retry,
                     )
             except Exception as e:
