@@ -15,6 +15,7 @@ from widgets.input import HistoryInput
 from widgets.tree import FileTree
 
 
+
 class AgentsMixin:
     @work(exclusive=True)
     async def _do_create_agent(self, description: str) -> None:
@@ -105,6 +106,65 @@ class AgentsMixin:
         self.agent = agent
         await self._render_history_into(scroll, agent)
         self.notify(f"✅ 已開啟 agent：{data['name']}", timeout=3)
+        # 若 config 有 greeting 且是全新對話，觸發 AI 主動開場
+        greeting = data.get("greeting", "").strip()
+        fresh = not any(m.get("role") != "system" for m in agent.history)
+        if greeting and fresh:
+            self._trigger_greeting(agent, scroll, greeting)
+
+    @work
+    async def _trigger_greeting(self, agent: "Agent", scroll: "VerticalScroll", greeting_prompt: str) -> None:
+        """讓 agent 主動說第一句話。trigger 不存入 history，只保留 assistant 回覆。"""
+        from textual.widgets import Static as _Static
+        from widgets.chat import AIMessage
+        prompt = self.query_one("#prompt", HistoryInput)
+        prompt.disabled = True
+        prompt.border_title = f"{SPINNER[0]} {get_nickname(agent.profile.name)} 開場中…"
+        _spin_idx = 0
+
+        def _tick() -> None:
+            nonlocal _spin_idx
+            _spin_idx = (_spin_idx + 1) % len(SPINNER)
+            prompt.border_title = f"{SPINNER[_spin_idx]} {get_nickname(agent.profile.name)} 開場中…"
+
+        timer = self.set_interval(0.08, _tick)
+        stream_msg: AIMessage | None = None
+        buf: list[str] = []
+
+        async def on_token(chunk: str) -> None:
+            nonlocal stream_msg
+            buf.append(chunk)
+            if stream_msg is None:
+                await scroll.mount(_Static(f"🤖 {get_nickname(agent.profile.name)}", classes="ai-header", markup=False))
+                stream_msg = AIMessage()
+                await scroll.mount(stream_msg)
+            await stream_msg.update_content("".join(buf))
+            scroll.scroll_end(animate=False)
+
+        async def on_done(*_) -> None:
+            if stream_msg and buf:
+                await stream_msg.update_content("".join(buf), final=True)
+
+        try:
+            await agent.chat(
+                {"role": "user", "content": greeting_prompt},
+                on_token=on_token,
+                on_done=on_done,
+            )
+            # 把 trigger user message 從 history 移除，只保留 assistant 開場白
+            agent.history = [
+                m for m in agent.history
+                if not (m.get("role") == "user" and m.get("content") == greeting_prompt)
+            ]
+            agent.save_history()
+        except Exception as e:
+            self.notify(f"greeting 失敗：{e}", severity="warning")
+        finally:
+            timer.stop()
+            prompt.disabled = False
+            self._update_prompt_title()
+            prompt.placeholder = f"傳訊息給 {get_nickname(agent.profile.name)}..."
+            prompt.focus()
 
     async def _do_list_agents(self) -> None:
         from core.agent_factory import list_agents

@@ -22,6 +22,7 @@ CREATE_AGENT_PROMPT = """\
   "nickname": "簡短暱稱（2-4字，用於 UI 顯示）",
   "model": "選擇最適合的模型名稱",
   "system_prompt": "完整的 system prompt，包含角色定義、專業知識、行為規範、回覆風格",
+  "greeting": "開場白觸發 prompt，例如：「請以你的角色主動打招呼，介紹你自己和你能提供的幫助」",
   "mcp_servers": {{}},
   "history_keep": 15,
   "description": "一句話說明這個 agent 的用途"
