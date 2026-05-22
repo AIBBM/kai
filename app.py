@@ -205,10 +205,11 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             dir_name = find_agent(query)
             if not dir_name:
                 agents = list_agents()
-                names = "、".join(
-                    f"{a['name']}（{a['dir']}）" for a in agents
-                ) or "（無）"
-                return f"找不到符合「{query}」的 agent。可用 agent：{names}"
+                names = "、".join(a["name"] for a in agents) or "（無）"
+                return (
+                    f"找不到符合「{query}」的 agent。"
+                    f"請從以下名稱中選擇一個，再呼叫 open_agent：{names}"
+                )
             _app._pending_open_agent = dir_name
             return f"✅ 找到 agent：{dir_name}，正在開啟..."
 
