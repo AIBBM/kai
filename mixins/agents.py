@@ -95,6 +95,14 @@ class AgentsMixin:
         os.environ[f"NICKNAME_{_normalize(model)}"] = nickname
         if "history_keep" in data:
             agent.history_keep = int(data["history_keep"])
+        # TTS config：True → 預設設定，dict → 自訂 voice/player
+        tts_raw = data.get("tts")
+        if tts_raw is True:
+            agent._tts_config = {"voice": "en-US-AriaNeural"}  # type: ignore[attr-defined]
+        elif isinstance(tts_raw, dict) and tts_raw:
+            agent._tts_config = tts_raw  # type: ignore[attr-defined]
+        else:
+            agent._tts_config = None  # type: ignore[attr-defined]
         tab_idx = len(self._agent_tabs)
         tab_id = f"agent-{tab_idx}"
         scroll = VerticalScroll(id=f"msgs-agent-{tab_idx}")

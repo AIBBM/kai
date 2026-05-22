@@ -125,6 +125,15 @@ class StreamingMixin:
                 self.query_one("#file-tree", FileTree).refresh_tree()
                 if at_bot:
                     msgs.scroll_end(animate=False)
+                # TTS：若 agent config 有啟用，背景播放
+                _tts_cfg = getattr(self.agent, "_tts_config", None)
+                if _tts_cfg and _display:
+                    from core.tts import speak
+                    asyncio.create_task(speak(
+                        _display,
+                        voice=_tts_cfg.get("voice", "en-US-AriaNeural"),
+                        player=_tts_cfg.get("player", "auto"),
+                    ))
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
                 nonlocal stream_msg, buf
