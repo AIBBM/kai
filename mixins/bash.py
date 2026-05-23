@@ -36,7 +36,7 @@ class BashMixin(_MixinBase):
                 self.notify(f"切換失敗：{e}", severity="error")
             return
 
-        msgs = self.query_one("#messages", VerticalScroll)
+        msgs = self._active_msgs()
         prompt = self.query_one("#prompt", HistoryInput)
         await msgs.mount(Static(f"[bold]$[/bold] {cmd}", markup=True, classes="user-bubble"))
         msgs.scroll_end(animate=False)

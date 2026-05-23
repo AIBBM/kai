@@ -87,7 +87,13 @@ class Agent:
         若有 _custom_system_prompt（agent factory 建立的 agent），直接使用，不走通用邏輯。
         """
         if self._custom_system_prompt is not None:
-            msg = {"role": "system", "content": self._custom_system_prompt}
+            notes_root = self._agent_dir if self._agent_dir else Path(os.getcwd())
+            notes_path = notes_root / "AGENT_NOTES.md"
+            notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
+            content = self._custom_system_prompt
+            if notes:
+                content += f"\n\n## 📝 專案記憶\n{notes}\n\n以上規則必須嚴格遵守。"
+            msg = {"role": "system", "content": content}
             if self.history and self.history[0]["role"] == "system":
                 self.history[0] = msg
             else:

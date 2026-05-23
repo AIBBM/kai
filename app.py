@@ -259,6 +259,12 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             ("/create-agent", "用 AI 設計新 agent  /create-agent <描述>"),
             ("/load-agent", "載入 agent 設定  /load-agent <name>"),
             ("/list-agents", "列出所有已建立的 agents"),
+            ("/tts", "切換 TTS 引擎  /tts <edge-tts|melotts|kokoro-api|kokoro|off>"),
+            ("/tts edge-tts", "切換 TTS 為 edge-tts（雲端）"),
+            ("/tts melotts", "切換 TTS 為 melotts（Docker 8886）"),
+            ("/tts kokoro-api", "切換 TTS 為 kokoro-api（Docker 8885）"),
+            ("/tts kokoro", "切換 TTS 為 kokoro（本地 ONNX）"),
+            ("/tts off", "關閉 TTS 語音"),
         ] + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
         self._sync_cap_bar()
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
@@ -478,12 +484,17 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                 if not arg:
                     self.notify("用法：/remember <要記住的內容>", severity="warning")
                 else:
-                    notes_path = Path(os.getcwd()) / "AGENT_NOTES.md"
-                    with open(notes_path, "a", encoding="utf-8") as _f:
-                        _f.write(f"\n- {arg}")
-                    self.agent._rebuild_system_prompt()
-                    self.notify("✅ 已記錄到 AGENT_NOTES.md", severity="information")
-                    self.query_one("#file-tree", FileTree).refresh_tree()
+                    notes_root = self.agent._agent_dir or Path(os.getcwd())
+                    notes_path = notes_root / "AGENT_NOTES.md"
+                    existing = notes_path.read_text(encoding="utf-8") if notes_path.exists() else ""
+                    if f"- {arg}" in existing:
+                        self.notify("已存在相同記錄，略過", severity="warning", timeout=3)
+                    else:
+                        with open(notes_path, "a", encoding="utf-8") as _f:
+                            _f.write(f"\n- {arg}")
+                        self.agent._rebuild_system_prompt()
+                        self.notify("✅ 已記錄到 AGENT_NOTES.md", severity="information")
+                        self.query_one("#file-tree", FileTree).refresh_tree()
             elif cmd == "/compact":
                 await self.action_compact()
             elif cmd == "/model" and arg:
