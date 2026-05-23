@@ -39,7 +39,7 @@ from widgets.commands import ChatCommands
 from widgets.input import ChatAutoComplete, HistoryInput
 from widgets.sidebar import ResizeHandle, Sidebar
 from widgets.tree import FileTree
-from widgets.utils import _IMAGE_EXTS, _SUFFIX_TO_LANG
+from widgets.utils import _IMAGE_EXTS
 
 logger.remove()
 logger.add(
@@ -768,6 +768,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         except Exception as e:
             self.notify(f"無法讀取 {path.name}：{e}", severity="error")
             return
+        from widgets.utils import _SUFFIX_TO_LANG
         lang = _SUFFIX_TO_LANG.get(path.suffix.lower())
         ta = FileViewer(
             content,
