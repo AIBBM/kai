@@ -224,11 +224,12 @@ class Agent:
                 logger.warning(f"載入歷史失敗：{e}")
 
     def _rotate_history(self):
-        """記憶條數超過 HISTORY_KEEP * 2 則時自動移除最舊的非-system 訊息。"""
+        """記憶條數超過 history_keep * 2 則時自動移除最舊的非-system 訊息。"""
+        keep = self.history_keep if self.history_keep else HISTORY_KEEP
         system = [m for m in self.history if m["role"] == "system"]
         rest = [m for m in self.history if m["role"] != "system"]
-        if len(rest) > HISTORY_KEEP * 2:
-            rest = rest[-(HISTORY_KEEP * 2) :]
+        if len(rest) > keep * 2:
+            rest = rest[-(keep * 2) :]
             self.history = system + rest
             logger.debug(f"歷史 rotate，保留 {len(rest)} 則")
 
@@ -239,10 +240,11 @@ class Agent:
         self._load_history()
 
     def save_history(self):
-        """將對話歷史寫入 _history_file，只存最近 HISTORY_KEEP * 2 則。"""
+        """將對話歷史寫入 _history_file，只存最近 history_keep 個 pair。"""
+        keep = self.history_keep if self.history_keep else HISTORY_KEEP
         system = [m for m in self.history if m["role"] == "system"]
         rest = [m for m in self.history if m["role"] != "system"]
-        to_save = system + rest[-(HISTORY_KEEP * 2) :]
+        to_save = system + rest[-(keep * 2):]
         try:
             self._history_file.write_text(
                 json.dumps(to_save, ensure_ascii=False, indent=2),
@@ -300,10 +302,11 @@ class Agent:
         return summary
 
     def _trim_history(self) -> list[dict]:
-        """保留 system message + 最近 HISTORY_KEEP 則訊息。"""
+        """保留 system message + 最近 history_keep 個 pair 送給 AI。"""
+        keep = self.history_keep if self.history_keep else HISTORY_KEEP
         system = [m for m in self.history if m["role"] == "system"]
         rest = [m for m in self.history if m["role"] != "system"]
-        return system + (rest[-self.history_keep:] if self.history_keep else [])
+        return system + rest[-(keep * 2):]
 
     def _trim_tool_result(self, content: str) -> str:
         """HTML 去標簽；超長截斷。"""

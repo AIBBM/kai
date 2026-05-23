@@ -115,6 +115,23 @@ class ChatCommands(Provider):
                 partial(_fill_prompt, app, "/create-agent "),
                 help="用 AI 根據描述設計並建立 agent"),
 
+            # ── TTS ──────────────────────────────────────────────────────────
+            Hit(0.8, "/tts kokoro-api  切換 TTS 引擎（Docker 8885）",
+                partial(_fill_prompt, app, "/tts kokoro-api"),
+                help="kokoro-fastapi Docker server（localhost:8885），OpenAI 格式"),
+            Hit(0.8, "/tts melotts  切換 TTS 引擎（Docker 8886）",
+                partial(_fill_prompt, app, "/tts melotts"),
+                help="切換語音引擎：melotts / kokoro-api / kokoro / edge-tts / off"),
+            Hit(0.8, "/tts kokoro  切換 TTS 引擎（本地 ONNX）",
+                partial(_fill_prompt, app, "/tts kokoro"),
+                help="切換語音引擎：melotts / kokoro-api / kokoro / edge-tts / off"),
+            Hit(0.8, "/tts edge-tts  切換 TTS 引擎（雲端）",
+                partial(_fill_prompt, app, "/tts edge-tts"),
+                help="切換語音引擎：melotts / kokoro-api / kokoro / edge-tts / off"),
+            Hit(0.8, "/tts off  關閉語音",
+                partial(_fill_prompt, app, "/tts off"),
+                help="關閉目前 agent 的 TTS 語音"),
+
             # ── 暱稱 / session 命名 ──────────────────────────────────────────────
             Hit(0.8, "/rename  命名目前 session",
                 partial(_fill_prompt, app, "/rename "),

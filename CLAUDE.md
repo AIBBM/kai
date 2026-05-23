@@ -216,6 +216,50 @@ Add one entry to `REGISTRY` in `core/models.py`:
 3. Register in `Agent.tools_map` in `core/agent.py`
 4. Pass the schema in `active_tools` list inside `chat()`
 
+## Agent config (`agents/<name>/config.json`)
+
+Each agent directory contains a `config.json`. All fields:
+
+| 欄位 | 必填 | 說明 |
+|------|------|------|
+| `name` | ✓ | Agent 名稱（目錄名） |
+| `nickname` | | 顯示暱稱（tab 標題、header） |
+| `model` | ✓ | 使用的模型（需在 REGISTRY 內） |
+| `system_prompt` | ✓ | System prompt 全文 |
+| `description` | | 一行說明，`/list-agents` 顯示 |
+| `greeting` | | 全新對話時 AI 主動說第一句話的 prompt |
+| `history_keep` | | 記住幾個來回（pair）；預設用 env `HISTORY_KEEP=10` |
+| `mcp_servers` | | 額外 MCP servers（同 global 格式） |
+| `tts` | | TTS 設定（見下表）；省略則不啟用語音 |
+
+### `tts` 欄位
+
+| 欄位 | 預設 | 說明 |
+|------|------|------|
+| `engine` | `"edge-tts"` | `"edge-tts"` / `"melotts"` / `"kokoro-api"` / `"kokoro"` |
+| `voice` | 依 engine | 見下方 voice 表 |
+| `lang` | `"en-us"` | 見下方 lang 表 |
+| `player` | `"auto"` | `"powershell"`（WSL2 建議）/ `"mpv"` / `"ffplay"` / `"auto"` |
+| `host` | `"localhost"` | Docker server 位址 |
+| `port` | 8886 | melotts=8886，kokoro-api=8885 |
+| `speed` | `1.0` | 語速倍率 |
+
+**voice / lang 對照表：**
+
+| engine | voice 範例 | lang |
+|--------|-----------|------|
+| `edge-tts` | `"en-US-AriaNeural"` `"zh-TW-HsiaoChenNeural"` | 不需填 |
+| `melotts` | `"EN-US"` `"EN-BR"` `"EN-AU"` `"ZH"` | `"en"` `"zh"` `"fr"` `"jp"` |
+| `kokoro-api` | `"af_bella"` `"af_sky"` `"am_adam"` | `"en-us"` |
+| `kokoro` | `"af_sky"` `"af_bella"` | `"en-us"` `"en-gb"` |
+
+### `history_keep` 語義
+
+`history_keep = N` 代表「記住最近 N 個 user/assistant 來回（pair）」：
+- 每次送給 AI：最後 N pair（= N×2 則訊息）
+- 存入 history.json：同樣 N pair
+- 全域預設：env `HISTORY_KEEP=10`（10 pair）
+
 ## Environment variables (`.env`)
 
 | Variable | Default | Description |

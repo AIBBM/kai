@@ -550,6 +550,8 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                         await msgs.mount(ImageBubble(str(p), question))
                         msgs.scroll_end(animate=False)
                         self._send(question, images=[str(p)])
+            elif cmd == "/tts":
+                self._do_tts_switch(arg)
             else:
                 self.notify(f"未知指令：{cmd}", severity="warning")
             return
@@ -630,6 +632,34 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         base = f"[bold]{USERNAME}[/bold] [dim]❯[/dim]"
         suffix = "  [dim]🔧 debug[/dim]" if self._debug_tools else ""
         self.query_one("#prompt", HistoryInput).border_title = base + suffix
+
+    def _do_tts_switch(self, arg: str) -> None:
+        _ENGINES = ("edge-tts", "kokoro", "kokoro-api", "melotts", "off")
+        engine = arg.strip().lower()
+        if not engine:
+            cfg = getattr(self.agent, "_tts_config", None)
+            if cfg:
+                self.notify(f"TTS 目前：{cfg.get('engine', 'edge-tts')}  voice={cfg.get('voice', '—')}", timeout=4)
+            else:
+                self.notify("TTS 已關閉（此 agent 無 tts 設定）", timeout=3)
+            return
+        if engine not in _ENGINES:
+            self.notify(f"未知引擎：{engine}  可用：{', '.join(_ENGINES)}", severity="warning")
+            return
+        if engine == "off":
+            self.agent._tts_config = None
+            self.notify("TTS 已關閉", timeout=3)
+            return
+        _defaults: dict[str, dict] = {
+            "kokoro":     {"voice": "af_sky",           "lang": "en-us"},
+            "kokoro-api": {"voice": "af_bella",         "lang": "en-us", "port": 8885},
+            "melotts":    {"voice": "EN-US",            "lang": "en",    "port": 8886},
+            "edge-tts":   {"voice": "en-US-AriaNeural", "lang": "en-us"},
+        }
+        cfg = dict(getattr(self.agent, "_tts_config", None) or {})
+        cfg.update({"engine": engine, **_defaults[engine]})
+        self.agent._tts_config = cfg
+        self.notify(f"TTS 切換為：{engine}  voice={cfg['voice']}", timeout=3)
 
     def _thinking_active(self) -> bool:
         if self._think_override is not None:
