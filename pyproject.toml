@@ -17,6 +17,12 @@ dependencies = [
     "textual-autocomplete>=4.0.6",
     "ollama>=0.6.2",
     "pillow>=12.2.0",
+    "edge-tts>=7.2.8",
+    "kokoro-onnx>=0.5.0",
+    "soundfile>=0.13.1",
+    "gradio-client>=2.5.0",
+    "websockets>=16.0",
+    "textual-fspicker>=1.0.1",
 ]
 
 [dependency-groups]
@@ -24,4 +30,5 @@ dev = [
     "ruff>=0.15.12",
     "textual-dev>=1.8.0",
     "pytest>=8.0",
+    "ipykernel>=7.2.0",
 ]

@@ -1,0 +1,400 @@
+"""TTS 模組 — edge-tts（雲端）或 kokoro-onnx（本地）生成音訊。"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from loguru import logger
+
+_PLAYERS = ["mpv", "ffplay", "mplayer", "mpg123"]
+
+# kokoro 模型單例（第一次呼叫時載入，之後重用）
+_kokoro_model: Any = None
+
+
+def _detect_player() -> str | None:
+    for p in _PLAYERS:
+        if shutil.which(p):
+            return p
+    return None
+
+
+def _player_cmd(player: str, path: str) -> list[str] | None:
+    match player:
+        case "mpv":
+            return ["mpv", "--no-terminal", "--really-quiet", path]
+        case "ffplay":
+            return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
+                    "-analyzeduration", "0", "-probesize", "32", path]
+        case "mplayer":
+            return ["mplayer", "-really-quiet", path]
+        case "mpg123":
+            return ["mpg123", "-q", path]
+        case "powershell":
+            return None  # 交給下方 PowerShell 分支處理
+        case _:
+            return [player, path]
+
+
+async def _play_file(path: str, player: str = "auto") -> None:
+    """播放音訊檔；CancelledError 時 kill 子程序。
+    player="powershell" 強制走 Windows 原生音訊（WSL2 最乾淨）。
+    """
+    # 決定播放指令
+    use_powershell = False
+    if player == "powershell":
+        use_powershell = True
+        cmd: list[str] = []  # placeholder，下方覆寫
+    else:
+        resolved = player if player != "auto" else _detect_player()
+        if resolved:
+            cmd = _player_cmd(resolved, path)  # type: ignore[assignment]
+        else:
+            use_powershell = True
+            cmd = []
+
+    if use_powershell:
+        try:
+            win_path = subprocess.check_output(
+                ["wslpath", "-w", path], stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except Exception:
+            logger.warning("tts: wslpath 轉換失敗，無法播放")
+            return
+        if path.endswith(".wav"):
+            win_path_esc = win_path.replace("'", "''")
+            script = (
+                "$p = New-Object System.Media.SoundPlayer; "
+                f"$p.SoundLocation = '{win_path_esc}'; "
+                "$p.PlaySync()"
+            )
+        else:
+            win_path_fwd = win_path.replace(chr(92), "/")
+            # polling 等待 NaturalDuration 就緒再等播完，不用估時長
+            script = (
+                "Add-Type -AssemblyName presentationCore; "
+                "$m = New-Object System.Windows.Media.MediaPlayer; "
+                f"$m.Open([Uri]'file:///{win_path_fwd}'); "
+                "$m.Play(); "
+                "$t=0; while(-not $m.NaturalDuration.HasTimeSpan -and $t -lt 50)"
+                "{Start-Sleep -Milliseconds 100; $t++}; "
+                "if($m.NaturalDuration.HasTimeSpan){"
+                "$dur=$m.NaturalDuration.TimeSpan.TotalMilliseconds; "
+                "while($m.Position.TotalMilliseconds -lt $dur-150){Start-Sleep -Milliseconds 100}}; "
+                "$m.Stop(); $m.Close()"
+            )
+        cmd = ["powershell.exe", "-NoProfile", "-Command", script]
+
+    player_label = "powershell" if use_powershell else (resolved if not use_powershell else "powershell")
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        logger.info(f"tts play start: {Path(path).name}  player={player_label}")
+        _t0 = asyncio.get_event_loop().time()
+        await proc.wait()
+        logger.info(f"tts play end: {Path(path).name}  elapsed={asyncio.get_event_loop().time() - _t0:.2f}s")
+    except asyncio.CancelledError:
+        if proc and proc.returncode is None:
+            proc.kill()
+        logger.info(f"tts play cancelled: {Path(path).name}")
+        raise
+    except Exception as e:
+        logger.warning(f"tts 播放失敗：{e}")
+
+
+def _clean_for_tts(text: str) -> str:
+    """移除 markdown 格式符號與不應朗讀的符號。"""
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    text = re.sub(r"`[^`]+`", "", text)
+    text = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", text)
+    text = re.sub(r"_{1,3}([^_]+)_{1,3}", r"\1", text)
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # 表格分隔線 / 水平線（--- | === 等）整行移除
+    text = re.sub(r"^[\s]*[-=|]{2,}[\s]*$", "", text, flags=re.MULTILINE)
+    # blockquote > 前綴
+    text = re.sub(r"^>\s*", "", text, flags=re.MULTILINE)
+    # markdown 表格管道符
+    text = re.sub(r"\|", " ", text)
+    text = re.sub(r"^[\s]*[•\*]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^[\s]*\d+[.)]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"[←→↑↓↖↗↘↙⇒⇐⇔▶▷◀◁►◄]", "", text)
+    text = re.sub(r"[\U0001F000-\U0001FFFF\U00002600-\U000027BF]", "", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    # URL 整個移除（不朗讀）
+    text = re.sub(r"https?://\S+", "", text)
+    # 剩餘斜線（slash 指令 /tts、路徑 /home/...）換成空白
+    text = re.sub(r"/", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+async def _speak_melotts(
+    text: str,
+    voice: str = "EN-US",
+    lang: str = "EN",
+    speed: float = 1.0,
+    host: str = "localhost",
+    port: int = 8886,
+    player: str = "auto",
+) -> None:
+    """透過 MeloTTS Gradio server（WebSocket queue）生成 WAV 並播放。"""
+    try:
+        import websockets
+    except ImportError:
+        logger.warning("tts: websockets 未安裝：uv add websockets")
+        return
+    import random
+    import string
+    import urllib.request
+
+    session = "kai_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    uri = f"ws://{host}:{port}/queue/join"
+
+    try:
+        async with websockets.connect(uri) as ws:  # type: ignore[attr-defined]
+            async for raw in ws:
+                msg = json.loads(raw)
+                m = msg.get("msg")
+                if m == "send_hash":
+                    await ws.send(json.dumps({"session_hash": session, "fn_index": 1}))
+                elif m == "send_data":
+                    await ws.send(json.dumps({
+                        "data": [voice, text, speed, lang],
+                        "fn_index": 1,
+                        "session_hash": session,
+                    }))
+                elif m == "process_completed":
+                    out = msg.get("output", {}).get("data", [None])[0]
+                    if not out:
+                        logger.warning("tts melotts: 無回傳音訊")
+                        return
+                    name = out.get("name", "")
+                    url = f"http://{host}:{port}/file={name}"
+                    fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="kai_tts_")
+                    os.close(fd)
+                    try:
+                        urllib.request.urlretrieve(url, tmp)
+                        await _play_file(tmp, player)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"tts melotts 播放失敗：{e}")
+                    finally:
+                        Path(tmp).unlink(missing_ok=True)
+                    return
+                elif m == "queue_full":
+                    logger.warning("tts melotts: server queue 已滿")
+                    return
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"tts melotts 連線失敗：{e}")
+
+
+_KOKORO_BASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+_KOKORO_CACHE = Path.home() / ".cache" / "kokoro-onnx"
+_KOKORO_MODEL_FILE = "kokoro-v1.0.int8.onnx"   # int8 CPU-friendly (~80MB)
+_KOKORO_VOICES_FILE = "voices-v1.0.bin"
+
+
+def _download_kokoro_file(filename: str) -> Path:
+    import urllib.request
+    dest = _KOKORO_CACHE / filename
+    if dest.exists():
+        return dest
+    _KOKORO_CACHE.mkdir(parents=True, exist_ok=True)
+    url = f"{_KOKORO_BASE}/{filename}"
+    logger.info(f"tts: 下載 {filename}…")
+    urllib.request.urlretrieve(url, dest)
+    logger.info(f"tts: {filename} 下載完成")
+    return dest
+
+
+def _load_kokoro() -> Any:
+    """載入 kokoro-onnx 模型（首次自動下載 ~100MB 至 ~/.cache/kokoro-onnx/）。"""
+    global _kokoro_model
+    if _kokoro_model is not None:
+        return _kokoro_model
+    try:
+        from kokoro_onnx import Kokoro
+    except ImportError:
+        raise RuntimeError("kokoro-onnx 未安裝：uv add kokoro-onnx soundfile")
+
+    model_path = _download_kokoro_file(_KOKORO_MODEL_FILE)
+    voices_path = _download_kokoro_file(_KOKORO_VOICES_FILE)
+    logger.info("tts: 初始化 kokoro 模型…")
+    _kokoro_model = Kokoro(str(model_path), str(voices_path))
+    logger.info("tts: kokoro 就緒")
+    return _kokoro_model
+
+
+_KOKORO_MAX_CHARS = 400  # CPU inference 每 100 字約 5-8s，限制避免等太久
+
+
+async def _speak_kokoro(
+    text: str,
+    voice: str = "af_sky",
+    lang: str = "en-us",
+    player: str = "auto",
+) -> None:
+    """kokoro-onnx 本地 TTS。模型在 thread executor 跑，不阻塞 event loop。"""
+    import soundfile as sf
+
+    if len(text) > _KOKORO_MAX_CHARS:
+        logger.info(f"tts kokoro: 截斷 {len(text)} → {_KOKORO_MAX_CHARS} 字")
+        text = text[:_KOKORO_MAX_CHARS].rsplit(" ", 1)[0]  # 在空白處截斷避免斷字
+
+    def _generate() -> tuple[Any, int]:
+        kokoro = _load_kokoro()
+        return kokoro.create(text, voice=voice, speed=1.0, lang=lang)
+
+    logger.info(f"tts kokoro generating: {len(text)} chars")
+    _t0 = asyncio.get_event_loop().time()
+    try:
+        samples, sample_rate = await asyncio.get_event_loop().run_in_executor(None, _generate)
+    except Exception as e:
+        logger.warning(f"tts kokoro 生成失敗：{e}")
+        return
+    logger.info(f"tts kokoro generated in {asyncio.get_event_loop().time() - _t0:.1f}s")
+
+    fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="kai_tts_")
+    os.close(fd)
+    try:
+        sf.write(tmp, samples, sample_rate)
+        await _play_file(tmp, player)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"tts kokoro 播放失敗：{e}")
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
+async def _speak_kokoro_api(
+    text: str,
+    voice: str = "af_bella",
+    speed: float = 1.0,
+    host: str = "localhost",
+    port: int = 8885,
+    player: str = "auto",
+) -> None:
+    """kokoro-fastapi Docker server，OpenAI 相容格式，回傳 WAV bytes。"""
+    import urllib.request
+
+    url = f"http://{host}:{port}/v1/audio/speech"
+    payload = json.dumps({
+        "model": "kokoro",
+        "input": text,
+        "voice": voice,
+        "response_format": "wav",
+        "speed": speed,
+    }).encode()
+
+    def _fetch() -> bytes:
+        req = urllib.request.Request(
+            url, data=payload, headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return resp.read()
+
+    if len(text) > _KOKORO_MAX_CHARS:
+        logger.info(f"tts kokoro-api: 截斷 {len(text)} → {_KOKORO_MAX_CHARS} 字")
+        text = text[:_KOKORO_MAX_CHARS].rsplit(" ", 1)[0]
+    logger.info(f"tts kokoro-api generating: {len(text)} chars  voice={voice}")
+    _t0 = asyncio.get_event_loop().time()
+    try:
+        audio_bytes = await asyncio.get_event_loop().run_in_executor(None, _fetch)
+    except Exception as e:
+        logger.warning(f"tts kokoro-api 請求失敗：{e}")
+        return
+    logger.info(f"tts kokoro-api generated in {asyncio.get_event_loop().time() - _t0:.1f}s")
+
+    fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="kai_tts_")
+    os.close(fd)
+    try:
+        Path(tmp).write_bytes(audio_bytes)
+        # 讀入、裁切末尾雜音、重寫為標準 WAV
+        try:
+            import numpy as np
+            import soundfile as sf
+            _data, _sr = sf.read(tmp)
+            # 裁切末尾低於 -46dB 的雜音（模型 noise floor）
+            _energy = np.abs(_data) if _data.ndim == 1 else np.max(np.abs(_data), axis=1)
+            _loud = np.where(_energy > 0.005)[0]
+            _orig_s = len(_data) / _sr
+            if len(_loud) > 0:
+                _end = min(_loud[-1] + int(_sr * 0.25), len(_data))
+                _data = _data[:_end]
+            sf.write(tmp, _data, _sr)
+            logger.debug(f"tts kokoro-api: {_orig_s:.1f}s → {len(_data)/_sr:.1f}s (trimmed {_orig_s - len(_data)/_sr:.1f}s noise)")
+        except Exception as _e:
+            logger.warning(f"tts kokoro-api: trim 失敗（仍嘗試播放）：{_e}")
+        await _play_file(tmp, player)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"tts kokoro-api 播放失敗：{e}")
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
+async def speak(
+    text: str,
+    voice: str = "en-US-AriaNeural",
+    player: str = "auto",
+    engine: str = "edge-tts",
+    lang: str = "en-us",
+    host: str = "localhost",
+    port: int = 8886,
+    speed: float = 1.0,
+) -> None:
+    """語音播放。engine 可為 'edge-tts'、'kokoro'、'kokoro-api'、'melotts'。"""
+    text = _clean_for_tts(text)
+    if not text:
+        return
+
+    if engine == "kokoro":
+        await _speak_kokoro(text, voice=voice, lang=lang, player=player)
+        return
+
+    if engine == "kokoro-api":
+        await _speak_kokoro_api(text, voice=voice, speed=speed, host=host, port=port, player=player)
+        return
+
+    if engine == "melotts":
+        await _speak_melotts(
+            text, voice=voice, lang=lang.upper(),
+            speed=speed, host=host, port=port, player=player,
+        )
+        return
+
+    # edge-tts
+    try:
+        import edge_tts
+    except ImportError:
+        logger.warning("tts: edge-tts 未安裝，執行 `uv add edge-tts`")
+        return
+
+    fd, tmp = tempfile.mkstemp(suffix=".mp3", prefix="kai_tts_")
+    os.close(fd)
+    try:
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(tmp)
+        await _play_file(tmp, player)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"tts 失敗：{e}")
+    finally:
+        Path(tmp).unlink(missing_ok=True)

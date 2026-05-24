@@ -1,13 +1,11 @@
 import types
 
-import core.agent as agent_module
 from core.agent import Agent
 
 
 def trim(history, keep, monkeypatch):
-    """Helper: run _trim_history on an arbitrary history list with a fixed HISTORY_KEEP."""
-    monkeypatch.setattr(agent_module, "HISTORY_KEEP", keep)
-    obj = types.SimpleNamespace(history=history)
+    """Helper: run _trim_history on an arbitrary history list with a fixed history_keep."""
+    obj = types.SimpleNamespace(history=history, history_keep=keep)
     return Agent._trim_history(obj)  # type: ignore[arg-type]
 
 

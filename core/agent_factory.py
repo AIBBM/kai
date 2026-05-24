@@ -22,6 +22,7 @@ CREATE_AGENT_PROMPT = """\
   "nickname": "簡短暱稱（2-4字，用於 UI 顯示）",
   "model": "選擇最適合的模型名稱",
   "system_prompt": "完整的 system prompt，包含角色定義、專業知識、行為規範、回覆風格",
+  "greeting": "開場白觸發 prompt，例如：「請以你的角色主動打招呼，介紹你自己和你能提供的幫助」",
   "mcp_servers": {{}},
   "history_keep": 15,
   "description": "一句話說明這個 agent 的用途"
@@ -79,6 +80,31 @@ def list_agents() -> list[dict[str, Any]]:
         except Exception:
             pass
     return result
+
+
+def find_agent(query: str) -> str | None:
+    """模糊比對 agent，回傳 dir name；找不到回傳 None。
+    比對順序：精確 dir → name/nickname 包含 query → query 包含 name/nickname → description 包含 query。
+    """
+    q = query.strip().lower()
+    agents = list_agents()
+    # 1. 精確 dir
+    for a in agents:
+        if a["dir"].lower() == q:
+            return a["dir"]
+    # 2. name 或 nickname 完全包含 query
+    for a in agents:
+        if q in a["name"].lower() or (a["nickname"] and q in a["nickname"].lower()):
+            return a["dir"]
+    # 3. query 包含 name 或 nickname（縮寫情況）
+    for a in agents:
+        if a["name"].lower() in q or (a["nickname"] and a["nickname"].lower() in q):
+            return a["dir"]
+    # 4. description 包含 query
+    for a in agents:
+        if a.get("description") and q in a["description"].lower():
+            return a["dir"]
+    return None
 
 
 def load_agent(name: str) -> tuple[dict[str, Any], Path]:

@@ -18,34 +18,49 @@ uv run python core/tools.py "搜尋關鍵字" 3
 uv run ruff check .
 uv run ruff format .
 
+# Run tests
+uv run pytest tests/
+
 # Start SearXNG + Valkey
 bash searxng/start.sh
 ```
-
-No test suite exists. Functional testing is done by running the app directly.
 
 ## Architecture
 
 Two entry points sharing the same core:
 
 ```
-app.py              → Textual TUI (primary); chat UI, file tree, tabs, sidebar
+app.py              → Textual TUI (primary); ChatApp composes all mixins
 main.py             → legacy Rich/prompt_toolkit CLI (still functional)
 core/
   agent.py          → Agent class: history, streaming, tool-call loop
-  tools.py          → web_search (SearXNG), run_tool dispatcher
+  agent_factory.py  → /create-agent, /load-agent, /list-agents logic (AI-based agent design)
+  backends.py       → stream_ollama / stream_openai_compat (backend-specific streaming)
+  tools.py          → web_search (SearXNG), bash_exec, run_tool dispatcher
   models.py         → ModelProfile dataclass + REGISTRY
   config.py         → all env-var constants (loaded once at import)
   mcp_client.py     → MCP server lifecycle + tool dispatch
+  tts.py            → TTS engine abstraction (edge-tts, melotts, kokoro-api, kokoro-onnx)
   file_picker.py    → prompt_toolkit file browser (used by main.py /image)
+mixins/             → ChatApp behaviour split into focused mixins (all inherit _MixinBase = ChatApp)
+  agents.py         → AgentsMixin: /create-agent, /load-agent, /list-agents
+  bash.py           → BashMixin: ! command execution
+  mcp.py            → MCPMixin: /mcp-list, /mcp-reload, /mcp-add, /mcp-del
+  session.py        → SessionMixin: /cd, /compact, /cls, /resume, /model, /rename, /nickname
+  streaming.py      → StreamingMixin: _send worker, on_token, on_done, TTS playback
 widgets/
   input.py          → HistoryInput, ChatAutoComplete
   tree.py           → RightClickTree, TreeContextMenu, FileTree
   sidebar.py        → ResizeHandle, Sidebar
   chat.py           → ImageBubble, FileViewer, CopyButton, CapabilityBadge, CapLabel, AIMessage
   commands.py       → ChatCommands (command palette provider)
+  agents_screen.py  → AgentsScreen ModalScreen (DataTable agent selector)
+  mcp_list.py       → MCPListScreen ModalScreen (MCP server / tool listing)
+  resume.py         → ResumeScreen ModalScreen (session archive browser + rename)
   utils.py          → shared TUI utilities: _copy_to_clipboard, file icons, _line_height, _wrap_box_drawing
 ```
+
+`core/` must not import `widgets/`. `widgets/` may import `core/`. Both layers use relative imports internally.
 
 ## TUI (`app.py`)
 
@@ -66,7 +81,7 @@ widgets/
 
 | Widget | File | Purpose |
 |--------|------|---------|
-| `ChatApp` | app.py | root App, all event handlers |
+| `ChatApp` | app.py | root App, composes all mixins, event handlers |
 | `HistoryInput` | widgets/input.py | single-line input with Up/Down history, Ctrl+Z undo, multiline paste intercept |
 | `ChatAutoComplete` | widgets/input.py | slash command / path autocomplete |
 | `FileTree` | widgets/tree.py | lazy-loading dir tree; double-click opens file tab; Ctrl+click / Space multi-select for batch delete; 2s deep fs watcher |
@@ -77,14 +92,20 @@ widgets/
 | `Sidebar` | widgets/sidebar.py | cwd / model / context files / git status / MCP tools |
 | `ResizeHandle` | widgets/sidebar.py | drag-to-resize handle between file tree and center |
 | `ChatCommands` | widgets/commands.py | Ctrl+P command palette: clear, switch model |
+| `AgentsScreen` | widgets/agents_screen.py | ModalScreen DataTable for /list-agents selection |
+| `MCPListScreen` | widgets/mcp_list.py | ModalScreen showing connected MCP servers + tools |
+| `ResumeScreen` | widgets/resume.py | ModalScreen session archive browser with inline rename |
 
 ### Slash commands
 
 | Command | Action |
 |---------|--------|
 | `/clear` | Archive history to `.history/`, clear UI (guard: skips if only system msg) |
-| `/resume [N]` | List or restore archived sessions from `.history/` |
+| `/resume [N]` | List or restore archived sessions (ResumeScreen picker) |
+| `/rename <name>` | Name current session (shown in ResumeScreen) |
+| `/compact` | Compress history with Gemini to free context window |
 | `/model <name>` | Switch model (hot-swap, preserves history) |
+| `/nickname [name]` | Query or set display nickname for current model |
 | `/add <path>` | Add file to context |
 | `/del <path>` | Remove file from context |
 | `/cd <path>` | Change directory (saves old history, loads new) |
@@ -94,6 +115,14 @@ widgets/
 | `/ask <question>` | Ephemeral question — not saved to history |
 | `/save` | Promote last `/ask` answer into permanent history |
 | `/remember <note>` | Write note to `AGENT_NOTES.md` (persistent across sessions) |
+| `/mcp-list` | Show connected MCP servers and tool descriptions |
+| `/mcp-reload` | Restart MCP servers without quitting the app |
+| `/mcp-add <name> <cmd> [args...]` | Add a new MCP server to `mcp_servers.json` |
+| `/mcp-del <name>` | Remove an MCP server from `mcp_servers.json` |
+| `/create-agent <description>` | Use AI to design a new agent config in `agents/` |
+| `/load-agent <name>` | Load an agent config and spawn a new tab |
+| `/list-agents` | Show all agents in `agents/` (AgentsScreen picker) |
+| `/tts <engine\|off>` | Switch TTS engine or disable: `edge-tts`, `melotts`, `kokoro-api`, `kokoro`, `off` |
 
 ### `!` bash commands
 
@@ -142,11 +171,11 @@ When changing directory (via `/cd` or `!cd`):
 4. Clears chat UI and context files
 5. Refreshes file tree and sidebar
 
-### Session history (`/cls` and `/resume`)
+### Session history (`/clear` and `/resume`)
 
-`/clear` archives `history.json` to `.history/YYYYMMDD_HHMMSS_N-turns.json` before clearing (guard: skips if history has only system message, or if just resumed with no new messages via `_resumed_from` flag).
+`/clear` archives `history.json` to `.history/YYYYMMDD_HHMMSS[_N].json` before clearing (guard: skips if history has only system message, or if just resumed with no new messages via `_resumed_from` flag).
 
-`/resume` lists archives with timestamp, turn count, and first user message preview. `/resume N` restores session N by copying the archive back to `history.json` and reloading.
+`/resume` opens `ResumeScreen` listing archives with timestamp, name, and first user message. Selecting an entry restores the session. Inline rename is supported from within the screen.
 
 ### Multiline paste (`HistoryInput`)
 
@@ -184,9 +213,19 @@ When pasting multiline text into the prompt:
 4. `save_history()` is called after every turn
 5. `reset_history()` clears and reloads `history.json` from current cwd (used on directory change)
 
+Actual streaming is delegated to `core/backends.py`: `stream_ollama` for Ollama models, `stream_openai_compat` for OpenAI-compatible endpoints (Gemini, etc.).
+
 ### History
 
 `HISTORY_FILE = Path("history.json")` — relative to cwd at runtime. Each project directory has its own history. Archives go to `.history/` (gitignored).
+
+### history vs messages distinction
+
+| | `self.history` | `messages` (current turn) |
+|---|---|---|
+| Content | user + assistant final replies | includes tool_calls + tool_results |
+| Persisted | written to history.json | exists only during chat() call |
+| Next turn | rebuilt via `_trim_history()` | discarded |
 
 ### Adding a new model
 
@@ -216,6 +255,61 @@ Add one entry to `REGISTRY` in `core/models.py`:
 3. Register in `Agent.tools_map` in `core/agent.py`
 4. Pass the schema in `active_tools` list inside `chat()`
 
+## Agent config (`agents/<name>/config.json`)
+
+Each agent directory contains a `config.json`. All fields:
+
+| 欄位 | 必填 | 說明 |
+|------|------|------|
+| `name` | ✓ | Agent 名稱（目錄名） |
+| `nickname` | | 顯示暱稱（tab 標題、header） |
+| `model` | ✓ | 使用的模型（需在 REGISTRY 內） |
+| `system_prompt` | ✓ | System prompt 全文 |
+| `description` | | 一行說明，`/list-agents` 顯示 |
+| `greeting` | | 全新對話時 AI 主動說第一句話的 prompt |
+| `history_keep` | | 記住幾個來回（pair）；預設用 env `HISTORY_KEEP=10` |
+| `mcp_servers` | | 額外 MCP servers（同 global 格式） |
+| `tts` | | TTS 設定（見下表）；省略則不啟用語音 |
+
+### `tts` 欄位
+
+| 欄位 | 預設 | 說明 |
+|------|------|------|
+| `engine` | `"edge-tts"` | `"edge-tts"` / `"melotts"` / `"kokoro-api"` / `"kokoro"` |
+| `voice` | 依 engine | 見下方 voice 表 |
+| `lang` | `"en-us"` | 見下方 lang 表 |
+| `player` | `"auto"` | `"powershell"`（WSL2 建議）/ `"mpv"` / `"ffplay"` / `"auto"` |
+| `host` | `"localhost"` | Docker server 位址 |
+| `port` | 8886 | melotts=8886，kokoro-api=8885 |
+| `speed` | `1.0` | 語速倍率 |
+
+**voice / lang 對照表：**
+
+| engine | voice 範例 | lang |
+|--------|-----------|------|
+| `edge-tts` | `"en-US-AriaNeural"` `"zh-TW-HsiaoChenNeural"` | 不需填 |
+| `melotts` | `"EN-US"` `"EN-BR"` `"EN-AU"` `"ZH"` | `"en"` `"zh"` `"fr"` `"jp"` |
+| `kokoro-api` | `"af_bella"` `"af_sky"` `"am_adam"` | `"en-us"` |
+| `kokoro` | `"af_sky"` `"af_bella"` | `"en-us"` `"en-gb"` |
+
+### `history_keep` 語義
+
+`history_keep = N` 代表「記住最近 N 個 user/assistant 來回（pair）」：
+- 每次送給 AI：最後 N pair（= N×2 則訊息）
+- 存入 history.json：同樣 N pair
+- 全域預設：env `HISTORY_KEEP=10`（10 pair）
+
+## MCP configuration
+
+Two config files control MCP servers:
+
+| File | Scope | Purpose |
+|------|-------|---------|
+| `mcp_servers.json` | project-level, checked in | global MCP servers available to all agents |
+| `agents/<name>/config.json` `.mcp_servers` | agent-level | extra servers for a specific agent |
+
+Disabled servers use a `_` prefix in `mcp_servers.json` (e.g. `_playwright`, `_twstock-db`). The `_` prefix convention prevents accidental activation — remove it to enable.
+
 ## Environment variables (`.env`)
 
 | Variable | Default | Description |
@@ -228,16 +322,28 @@ Add one entry to `REGISTRY` in `core/models.py`:
 | `USERNAME` | `你` | Display name in chat bubbles and prompt title |
 | `BASH_TIMEOUT` | `30` | `bash_exec` default timeout (seconds) |
 | `SEARXNG_URL` | `http://localhost:8888/search` | SearXNG API endpoint |
+| `CONTEXT7_API_KEY` | — | Context7 MCP API key |
+
+Only put true overrides in `.env`. Change defaults in `core/config.py`; change per-model context windows in `core/models.py`.
 
 ## SearXNG
 
 Runs in Docker on port 8888 with a Valkey sidecar for rate-limiting. Config is `searxng/settings.yml` (mounted read-only). `formats: [html, json]` must remain enabled for the JSON API used by `web_search`. `limiter: false` is intentional — this is a local private instance.
+
+## Conventions
+
+See `CONVENTIONS.md` for the full style guide. Key points:
+- All code comments, log messages, UI text, and error messages use **Traditional Chinese** (繁體中文). Avoid PRC variants: 「專案」not「項目」, 「程式碼」not「代碼」, 「函式」not「函數」.
+- All public functions and methods require type hints including return type.
+- I/O operations are `async def`; blocking calls go through `asyncio.to_thread()`.
+- Pure data structures use `@dataclass`; cross-boundary inputs use `pydantic.BaseModel`.
 
 ## Key dependencies
 
 - `textual` — TUI framework (with `[syntax]` extra for tree-sitter highlighting)
 - `textual-autocomplete` — slash command / path autocomplete in prompt
 - `ollama` — native Python client; used directly to access `msg.thinking` and `tool_calls`
+- `openai` — used by `stream_openai_compat` in `core/backends.py` for Gemini / compatible endpoints
 - `rich` — rendering in legacy CLI and agent internals
 - `prompt_toolkit` — legacy CLI prompt + file picker
 - `tenacity` — retry logic in `web_search`
