@@ -134,6 +134,8 @@ class ChatAutoComplete(AutoComplete):
         text = state.text
         if text.startswith("/image "):
             return text[7:]
+        if text.startswith("/cd "):
+            return text[4:]
         if text.startswith("/"):
             return text
         at = self._at_prefix(text)
@@ -154,7 +156,7 @@ class ChatAutoComplete(AutoComplete):
 
     def should_show_dropdown(self, search_string: str) -> bool:
         text = self._target_state.text
-        if text.startswith("/image "):
+        if text.startswith(("/image ", "/cd ")):
             return self.option_list.option_count > 0
         if self._at_prefix(text) is not None:
             return self.option_list.option_count > 0
@@ -164,6 +166,8 @@ class ChatAutoComplete(AutoComplete):
         text = state.text
         if text.startswith("/image "):
             return self._image_items(text[7:])
+        if text.startswith("/cd "):
+            return self._dir_items(text[4:])
         if text.startswith("/"):
             cmds = getattr(self.app, "SLASH_COMMANDS", [])
             return [

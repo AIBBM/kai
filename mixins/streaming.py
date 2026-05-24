@@ -27,7 +27,7 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 class StreamingMixin(_MixinBase):
     @work(exclusive=True)
-    async def _send(self, text: str, images: list[str] | None = None, ephemeral: bool = False) -> None:
+    async def _send(self, text: str, images: list[str] | None = None, ephemeral: bool = False, original_text: str | None = None) -> None:
         msgs = self._active_msgs()
         prompt = self.query_one("#prompt", HistoryInput)
         stream_msg: AIMessage | None = None
@@ -225,7 +225,13 @@ class StreamingMixin(_MixinBase):
 
         except Exception as e:
             err_str = str(e).lower()
-            if any(kw in err_str for kw in ("context", "too long", "window", "kv cache")) and (self.agent._gemini or self.agent._deepseek):
+            _overflow_kws = (
+                "context", "too long", "window", "kv cache",
+                "resource_exhausted", "maximum context", "exceeds the maximum",
+                "token limit", "context length", "prompt is too long",
+                "reduce the length",
+            )
+            if any(kw in err_str for kw in _overflow_kws) and (self.agent._gemini or self.agent._deepseek):
                 logger.warning(f"context overflow，啟動 autocompact：{e}")
                 try:
                     await msgs.mount(Static("⚡ Context 已滿，正在用 Gemini 壓縮對話歷史…", classes="error-msg", markup=False))
@@ -236,8 +242,12 @@ class StreamingMixin(_MixinBase):
                     msgs.scroll_end(animate=False)
                     stream_msg = None
                     buf.clear()
+                    retry_content = original_text if original_text else text
+                    retry_msg: dict = {"role": "user", "content": retry_content}
+                    if images:
+                        retry_msg["images"] = images
                     await self.agent.chat(
-                        user_msg,
+                        retry_msg,
                         on_token=on_token,
                         on_thinking=on_thinking,
                         on_done=on_done,

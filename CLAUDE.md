@@ -89,7 +89,7 @@ widgets/
 | `TreeContextMenu` | widgets/tree.py | ModalScreen right-click menu; shows "刪除選取 (N 項)" when multi-selected |
 | `FileViewer` | widgets/chat.py | TextArea with syntax highlighting + WSL-aware Ctrl+C multi-line copy; mtime polling for external change detection |
 | `AIMessage` | widgets/chat.py | AI response widget; Static stream-view during streaming, Markdown md-view on final |
-| `Sidebar` | widgets/sidebar.py | cwd / model / context files / git status / MCP tools |
+| `Sidebar` | widgets/sidebar.py | cwd / model / git status / MCP tools |
 | `ResizeHandle` | widgets/sidebar.py | drag-to-resize handle between file tree and center |
 | `ChatCommands` | widgets/commands.py | Ctrl+P command palette: clear, switch model |
 | `AgentsScreen` | widgets/agents_screen.py | ModalScreen DataTable for /list-agents selection |
@@ -106,8 +106,6 @@ widgets/
 | `/compact` | Compress history with Gemini to free context window |
 | `/model <name>` | Switch model (hot-swap, preserves history) |
 | `/nickname [name]` | Query or set display nickname for current model |
-| `/add <path>` | Add file to context |
-| `/del <path>` | Remove file from context |
 | `/cd <path>` | Change directory (saves old history, loads new) |
 | `/think` | Toggle thinking mode |
 | `/debug` | Toggle tool debug cards |
@@ -168,7 +166,7 @@ When changing directory (via `/cd` or `!cd`):
 1. Save current `history.json` to old cwd
 2. `os.chdir(target)`
 3. `agent.reset_history()` — clears and reloads from new cwd's `history.json`
-4. Clears chat UI and context files
+4. Clears chat UI
 5. Refreshes file tree and sidebar
 
 ### Session history (`/clear` and `/resume`)

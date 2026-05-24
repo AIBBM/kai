@@ -522,7 +522,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                                 await self._do_cd(str(path))
                             except Exception as e:
                                 self.notify(f"切換失敗：{e}", severity="error")
-                    await self.push_screen_wait(
+                    self.push_screen(
                         SelectDirectory(os.getcwd(), title="切換目錄"),
                         callback=_on_dir_selected,
                     )
@@ -563,12 +563,10 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                     )
                     async def _on_image_selected(path: Path | None) -> None:
                         if path:
-                            q = "請分析這張圖片"
-                            msgs = self._active_msgs()
-                            await msgs.mount(ImageBubble(str(path), q))
-                            msgs.scroll_end(animate=False)
-                            self._send(q, images=[str(path)])
-                    await self.push_screen_wait(
+                            prompt.value = f"/image {path} "
+                            prompt.cursor_position = len(prompt.value)
+                            prompt.focus()
+                    self.push_screen(
                         FileOpen(os.getcwd(), title="選擇圖片", filters=_img_filters),
                         callback=_on_image_selected,
                     )
@@ -607,7 +605,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         else:
             full_text = text
 
-        self._send(full_text)
+        self._send(full_text, original_text=text)
 
     # ── Actions ───────────────────────────────────────────────────────────────
 

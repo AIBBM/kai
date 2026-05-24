@@ -56,7 +56,7 @@ class ResizeHandle(Widget):
 
 
 class Sidebar(Widget):
-    """工作目錄、上下文檔案、模型、Git 狀態側邊欄。"""
+    """工作目錄、模型、Git 狀態側邊欄。"""
 
     def compose(self) -> ComposeResult:
         yield Static("📂 工作目錄", classes="sidebar-title", markup=True)
