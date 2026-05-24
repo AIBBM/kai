@@ -34,6 +34,7 @@ from mixins.bash import BashMixin
 from mixins.mcp import MCPMixin
 from mixins.session import SessionMixin
 from mixins.streaming import StreamingMixin
+from textual_fspicker import FileOpen, Filters, SelectDirectory
 from widgets.chat import AIMessage, CapabilityBadge, CapLabel, ConfirmCloseScreen, FileViewer, ImageBubble
 from widgets.commands import ChatCommands
 from widgets.input import ChatAutoComplete, HistoryInput
@@ -515,7 +516,16 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                     except Exception as e:
                         self.notify(f"切換失敗：{e}", severity="error")
                 else:
-                    self.notify(f"目前目錄：{os.getcwd()}", severity="information")
+                    async def _on_dir_selected(path: Path | None) -> None:
+                        if path:
+                            try:
+                                await self._do_cd(str(path))
+                            except Exception as e:
+                                self.notify(f"切換失敗：{e}", severity="error")
+                    await self.push_screen_wait(
+                        SelectDirectory(os.getcwd(), title="切換目錄"),
+                        callback=_on_dir_selected,
+                    )
             elif cmd == "/mcp-list":
                 await self._do_mcp_list()
             elif cmd == "/mcp-reload":
@@ -541,11 +551,26 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             elif cmd == "/list-agents":
                 await self._do_list_agents()
             elif cmd == "/image":
-                if not arg:
-                    self.notify("用法：/image <圖片路徑> [問題]", severity="warning")
-                elif not self.agent.profile.supports_vision:
+                if not self.agent.profile.supports_vision:
                     self.notify(
                         f"{self.agent.profile.name} 不支援圖片輸入", severity="error"
+                    )
+                elif not arg:
+                    _img_filters = Filters(
+                        ("圖片", lambda p: p.suffix.lower() in {
+                            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+                        }),
+                    )
+                    async def _on_image_selected(path: Path | None) -> None:
+                        if path:
+                            q = "請分析這張圖片"
+                            msgs = self._active_msgs()
+                            await msgs.mount(ImageBubble(str(path), q))
+                            msgs.scroll_end(animate=False)
+                            self._send(q, images=[str(path)])
+                    await self.push_screen_wait(
+                        FileOpen(os.getcwd(), title="選擇圖片", filters=_img_filters),
+                        callback=_on_image_selected,
                     )
                 else:
                     img_parts = arg.split(" ", 1)
