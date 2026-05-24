@@ -382,28 +382,28 @@ MarkdownTableContent {
     max-width: 100%;
 }
 
-/* ─── 附件按鈕 ─── */
+/* ─── 附件按鈕（Static，不是 Button，無 border 問題）─── */
 .attach-btn {
     width: 3;
     height: 3;
-    min-width: 3;
-    border: none;
     background: transparent;
     margin: 0 0 0 1;
-    padding: 0;
+    padding: 1 0 0 0;
+    content-align: center top;
+    color: $text-muted;
 }
 
 .attach-btn:hover {
     background: $boost;
+    color: $text;
 }
 
-/* ─── Sidebar CWD 按鈕 ─── */
+/* ─── Sidebar CWD 可點擊標題（Static）─── */
 .sidebar-title-btn {
     width: 1fr;
     height: 1;
-    border: none;
     background: transparent;
-    color: $text-muted;
+    color: $accent;
     text-style: bold;
     padding: 0 1;
 }

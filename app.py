@@ -12,12 +12,11 @@ if TYPE_CHECKING:
     from textual.worker import Worker
 
 from loguru import logger
-from textual import events, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import (
-    Button,
     Footer,
     Header,
     Input,
@@ -189,7 +188,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             yield ResizeHandle("sidebar", id="sidebar-handle", right_anchor=True)
             yield Sidebar(id="sidebar")
         with Horizontal(id="input-row"):
-            yield Button("📎", id="attach-btn", classes="attach-btn")
+            yield Static("📎", id="attach-btn", classes="attach-btn")
             yield HistoryInput(placeholder=f"傳訊息給 {MODEL}...", id="prompt")
         yield ChatAutoComplete(target="#prompt", candidates=None)
         with Horizontal(id="cap-bar"):
@@ -422,35 +421,36 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             prompt.value = self._input_history[-(self._history_idx + 1)]
         prompt.cursor_position = len(prompt.value)
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "attach-btn":
-            from textual_fspicker import FileOpen, Filters
-            _filters = Filters(
-                ("圖片", lambda p: p.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}),
-                ("文字", lambda p: p.suffix.lower() in {".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ts", ".js", ".html", ".css"}),
-                ("所有檔案", lambda p: True),
-            )
+    @on(events.Click, "#attach-btn")
+    async def _on_attach_clicked(self, event: events.Click) -> None:
+        event.stop()
+        from textual_fspicker import FileOpen, Filters
+        _filters = Filters(
+            ("圖片", lambda p: p.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}),
+            ("文字", lambda p: p.suffix.lower() in {".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ts", ".js", ".html", ".css"}),
+            ("所有檔案", lambda p: True),
+        )
 
-            async def _on_attach(path) -> None:
-                if path:
-                    from pathlib import Path as _Path
-                    p = _Path(path)
-                    prompt = self.query_one("#prompt", HistoryInput)
-                    if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
-                        prompt.value = f"/image {p} "
-                    else:
-                        cur = prompt.value
-                        insert = f"@{p} "
-                        if cur and not cur.endswith(" "):
-                            insert = " " + insert
-                        prompt.value = cur + insert
-                    prompt.cursor_position = len(prompt.value)
-                    prompt.focus()
+        async def _on_attach(path) -> None:
+            if path:
+                from pathlib import Path as _Path
+                p = _Path(path)
+                prompt = self.query_one("#prompt", HistoryInput)
+                if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+                    prompt.value = f"/image {p} "
+                else:
+                    cur = prompt.value
+                    insert = f"@{p} "
+                    if cur and not cur.endswith(" "):
+                        insert = " " + insert
+                    prompt.value = cur + insert
+                prompt.cursor_position = len(prompt.value)
+                prompt.focus()
 
-            self.push_screen(
-                FileOpen(os.getcwd(), title="選擇附件", filters=_filters),
-                callback=_on_attach,
-            )
+        self.push_screen(
+            FileOpen(os.getcwd(), title="選擇附件", filters=_filters),
+            callback=_on_attach,
+        )
 
     def on_paste(self, event: events.Paste) -> None:
         if _MOUSE_SEQ.search(event.text):
@@ -651,6 +651,9 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         ".pyc", ".pyo", ".so", ".dll", ".exe",
         ".o", ".a", ".lib", ".obj",
     })
+    _AT_IMAGE_SUFFIXES = frozenset({
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tiff", ".svg",
+    })
 
     def _dir_tree(self, root: Path, prefix: str = "", depth: int = 0) -> list[str]:
         if depth > 4:
@@ -686,6 +689,9 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                     continue
                 seen.add(str(p))
                 if p.is_file():
+                    if p.suffix.lower() in self._AT_IMAGE_SUFFIXES:
+                        self.notify(f"@{p.name} 是圖片，請改用 /image 指令", severity="warning", timeout=3)
+                        continue
                     files.append((str(p), p.read_text(encoding="utf-8", errors="replace")))
                 elif p.is_dir():
                     tree_lines = [p.name + "/"] + self._dir_tree(p)
@@ -761,7 +767,10 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         self.query_one("#file-tree-handle", ResizeHandle).display = ft.display
 
     async def on_click(self, event: events.Click) -> None:
-        widget, region = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        try:
+            widget, region = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        except Exception:
+            return
         wid = widget.id or "" if widget else ""
         if not wid.startswith("--content-tab-") or wid == "--content-tab-chat":
             return

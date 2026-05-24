@@ -94,7 +94,7 @@ class ImageBubble(Widget):
 class FileViewer(TextArea):
     """檔案檢視與編輯器：Ctrl+S 存檔、Ctrl+C 多行複製（WSL）、修改時 tab 標題加 ●。"""
 
-    BINDINGS = [Binding("ctrl+s", "save", "儲存"), Binding("ctrl+shift+s", "save_as", "另存新檔")]
+    BINDINGS = [Binding("ctrl+s", "save", "儲存"), Binding("f2", "save_as", "另存新檔")]
 
     def __init__(self, *args, file_path: Path | None = None, **kwargs) -> None:
         super().__init__(*args, **kwargs)
