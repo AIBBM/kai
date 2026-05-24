@@ -381,3 +381,34 @@ MarkdownTable {
 MarkdownTableContent {
     max-width: 100%;
 }
+
+/* ─── 附件按鈕 ─── */
+.attach-btn {
+    width: 3;
+    height: 3;
+    min-width: 3;
+    border: none;
+    background: transparent;
+    margin: 0 0 0 1;
+    padding: 0;
+}
+
+.attach-btn:hover {
+    background: $boost;
+}
+
+/* ─── Sidebar CWD 按鈕 ─── */
+.sidebar-title-btn {
+    width: 1fr;
+    height: 1;
+    border: none;
+    background: transparent;
+    color: $text-muted;
+    text-style: bold;
+    padding: 0 1;
+}
+
+.sidebar-title-btn:hover {
+    background: $boost;
+    color: $text;
+}
