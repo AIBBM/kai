@@ -204,26 +204,16 @@ class AgentsMixin(_MixinBase):
             return
 
         name = data.get("nickname") or data.get("name", adir.name)
+        new_prompt = data.get("system_prompt", "")
+        new_model = data.get("model", self.agent.profile.name)
         changes: list[str] = []
 
-        # history.json 被手動刪除 → 清除 in-memory history，避免 save_history 還原
-        if not self.agent._history_file.exists():
-            self.agent.history = []
-            changes.append("history 清除")
-
-        # system_prompt
-        new_prompt = data.get("system_prompt", "")
         if new_prompt and new_prompt != self.agent._custom_system_prompt:
-            self.agent._custom_system_prompt = new_prompt
             changes.append("system_prompt")
-
-        # nickname
         if name != self.agent._nickname:
-            self.agent._nickname = name
             changes.append("nickname")
 
-        # model（需換 Agent 物件）
-        new_model = data.get("model", self.agent.profile.name)
+        # model 變更：換 Agent 物件；Agent.__init__ 自動從磁碟載入 history
         if new_model != self.agent.profile.name:
             if new_model not in REGISTRY:
                 self.notify(f"未知模型：{new_model}", severity="error")
@@ -238,16 +228,20 @@ class AgentsMixin(_MixinBase):
             self.agent.mcp_client = old.mcp_client
             self.agent.mcp_context = getattr(old, "mcp_context", "")
             self.agent._nickname = name
-            self.agent.history = old.history[:]  # 已清除過的話這裡就是 []
             # 同步更新 _agent_tabs 映射
             for tid, ag in list(self._agent_tabs.items()):
                 if ag is old:
                     self._agent_tabs[tid] = self.agent
                     break
             changes.append(f"model → {new_model}")
-
-        self.agent._rebuild_system_prompt()
-        self.agent.save_history()
+        else:
+            # 以磁碟為準重載 history（不呼叫 save_history，避免覆寫使用者手動編輯）
+            if new_prompt:
+                self.agent._custom_system_prompt = new_prompt
+            self.agent._nickname = name
+            self.agent.history = []
+            self.agent._rebuild_system_prompt()   # 先把新 system prompt 放進去
+            self.agent._load_history()            # 再從磁碟補入 non-system 訊息
 
         # 更新 UI
         from widgets.sidebar import Sidebar
@@ -261,9 +255,10 @@ class AgentsMixin(_MixinBase):
         self._update_subtitle()
         self._sync_cap_bar()
 
-        # history 清除時同步清空聊天畫面
-        if "history 清除" in changes:
-            await self._active_msgs().remove_children()
+        # 重新渲染聊天畫面（history 可能已有增減）
+        msgs = self._active_msgs()
+        await msgs.remove_children()
+        await self._render_history_into(msgs, self.agent)
 
         change_str = "、".join(changes) if changes else "（無變更）"
         self.notify(f"✅ {name} 已重載：{change_str}", timeout=4)
