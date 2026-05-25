@@ -20,6 +20,7 @@ from .config import (
     MAX_TOOL_CALLS,
     NUM_CTX,
     USERNAME,
+    get_nickname,
 )
 from .models import ModelProfile, get_profile
 from .tools import (
@@ -56,6 +57,7 @@ class Agent:
         self.last_prediction: str = ""
         self._cancelled = False
         self._tts_config: dict | None = None  # 由 _do_load_agent 注入；None 表示不啟用 TTS
+        self._nickname: str | None = None    # agent tab 的顯示暱稱；不寫 os.environ 以免污染 main agent
         # agent 專屬目錄（存 history.json / AGENT_NOTES.md；None 表示用 cwd）
         self._agent_dir: "Path | None" = agent_dir
         self._history_file: Path = history_file or HISTORY_FILE
@@ -120,8 +122,7 @@ class Agent:
         else:
             mcp_server_desc = ""
 
-        from core.config import get_nickname
-        nickname = get_nickname(self.profile.name)
+        nickname = self.display_name
         nickname_line = (
             f"你的名字是「{nickname}」。" if nickname != self.profile.name else ""
         )
@@ -196,6 +197,11 @@ class Agent:
             self.history[0] = system_msg
         else:
             self.history.insert(0, system_msg)
+
+    @property
+    def display_name(self) -> str:
+        """顯示名稱：agent tab 用 _nickname，main agent 用 get_nickname（讀 env/.env）。"""
+        return self._nickname or get_nickname(self.profile.name)
 
     # 時間相關的關鍵字，匹配到即視為時間問答訊息
     _TIME_KEYWORDS = ("現在時間", "幾點", "幾点", "時間是", "時區", "UTC")

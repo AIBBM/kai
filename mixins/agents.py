@@ -1,14 +1,12 @@
 """AgentsMixin — /create-agent, /load-agent, /list-agents 指令邏輯。"""
 from __future__ import annotations
 
-import os
-
 from textual import work
 from textual.containers import VerticalScroll
 from textual.widgets import Static, TabbedContent, TabPane
 
 from core.agent import Agent
-from core.config import _normalize, get_nickname
+
 from core.models import REGISTRY
 from mixins.streaming import SPINNER
 from widgets.input import HistoryInput
@@ -75,7 +73,7 @@ class AgentsMixin(_MixinBase):
             self.agent.save_history()
             prompt.disabled = False
             self._update_prompt_title()
-            prompt.placeholder = f"傳訊息給 {get_nickname(self.agent.profile.name)}..."
+            prompt.placeholder = f"傳訊息給 {self.agent.display_name}..."
             prompt.focus()
 
     async def _do_load_agent(self, name: str) -> None:
@@ -95,10 +93,14 @@ class AgentsMixin(_MixinBase):
             agent_dir=adir,
             system_prompt=data["system_prompt"],
         )
-        agent.mcp_client = self.agent.mcp_client
-        agent.mcp_context = getattr(self.agent, "mcp_context", "")
+        # mcp_servers 明確設為 {} 表示不要 MCP；省略或非空則共用 main agent 的 MCP client
+        mcp_cfg = data.get("mcp_servers")
+        if mcp_cfg != {}:
+            agent.mcp_client = self.agent.mcp_client
+            agent.mcp_context = getattr(self.agent, "mcp_context", "")
         nickname = data.get("nickname") or data["name"]
-        os.environ[f"NICKNAME_{_normalize(model)}"] = nickname
+        # 不寫 os.environ 以免污染使用相同 model 的 main agent 暱稱
+        agent._nickname = nickname
         if "history_keep" in data:
             agent.history_keep = int(data["history_keep"])
         # TTS config：True → 預設設定，dict → 自訂 voice/player
@@ -133,13 +135,13 @@ class AgentsMixin(_MixinBase):
         from widgets.chat import AIMessage
         prompt = self.query_one("#prompt", HistoryInput)
         prompt.disabled = True
-        prompt.border_title = f"{SPINNER[0]} {get_nickname(agent.profile.name)} 開場中…"
+        prompt.border_title = f"{SPINNER[0]} {agent.display_name} 開場中…"
         _spin_idx = 0
 
         def _tick() -> None:
             nonlocal _spin_idx
             _spin_idx = (_spin_idx + 1) % len(SPINNER)
-            prompt.border_title = f"{SPINNER[_spin_idx]} {get_nickname(agent.profile.name)} 開場中…"
+            prompt.border_title = f"{SPINNER[_spin_idx]} {agent.display_name} 開場中…"
 
         timer = self.set_interval(0.08, _tick)
         stream_msg: AIMessage | None = None
@@ -149,7 +151,7 @@ class AgentsMixin(_MixinBase):
             nonlocal stream_msg
             buf.append(chunk)
             if stream_msg is None:
-                await scroll.mount(_Static(f"🤖 {get_nickname(agent.profile.name)}", classes="ai-header", markup=False))
+                await scroll.mount(_Static(f"🤖 {agent.display_name}", classes="ai-header", markup=False))
                 stream_msg = AIMessage()
                 await scroll.mount(stream_msg)
             await stream_msg.update_content("".join(buf))
@@ -178,7 +180,7 @@ class AgentsMixin(_MixinBase):
             prompt.disabled = False
             if self.agent is agent:
                 self._update_prompt_title()
-                prompt.placeholder = f"傳訊息給 {get_nickname(agent.profile.name)}..."
+                prompt.placeholder = f"傳訊息給 {agent.display_name}..."
                 prompt.focus()
 
     async def _do_reload_agent(self) -> None:

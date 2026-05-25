@@ -26,7 +26,7 @@ from textual.widgets import (
 )
 
 from core.agent import Agent
-from core.config import DEBUG_TOOLS, MODEL, USERNAME, get_nickname
+from core.config import DEBUG_TOOLS, MODEL, USERNAME
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
 from mixins.agents import AgentsMixin
@@ -284,7 +284,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         """核心渲染邏輯，可指定目標 scroll 與 agent（供 agent tab 直接呼叫）。"""
         widgets: list = []
         ai_updates: list[tuple[AIMessage, str]] = []
-        nickname = get_nickname(agent.profile.name)
+        nickname = agent.display_name
 
         for msg in agent.history:
             role = msg.get("role")
@@ -789,11 +789,15 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         tab_id = pane.id if pane else None
         if not tab_id:
             return
+        sidebar = self.query_one("#sidebar", Sidebar)
         if tab_id in self._agent_tabs:
             self.agent = self._agent_tabs[tab_id]
-            nickname = get_nickname(self.agent.profile.name)
+            display = self.agent.display_name
             prompt = self.query_one("#prompt", HistoryInput)
-            prompt.placeholder = f"傳訊息給 {nickname}..."
+            prompt.placeholder = f"傳訊息給 {display}..."
+            sidebar.set_model(display)
+            mcp_sum = self.agent.mcp_client.server_summary if self.agent.mcp_client else {}
+            sidebar.set_mcp(mcp_sum)
             self._resumed_from = self._tab_resumed_from.get(tab_id, None)
             self._session_name = self._tab_session_names.get(tab_id, "")
             self._update_subtitle()
@@ -801,9 +805,12 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         elif tab_id == "chat":
             if self._main_agent is not None:
                 self.agent = self._main_agent
-                nickname = get_nickname(self.agent.profile.name)
+                display = self.agent.display_name
                 prompt = self.query_one("#prompt", HistoryInput)
-                prompt.placeholder = f"傳訊息給 {nickname}..."
+                prompt.placeholder = f"傳訊息給 {display}..."
+                sidebar.set_model(display)
+                mcp_sum = self.agent.mcp_client.server_summary if self.agent.mcp_client else {}
+                sidebar.set_mcp(mcp_sum)
                 self._resumed_from = self._tab_resumed_from.get("chat", None)
                 self._session_name = self._tab_session_names.get("chat", "")
                 self._update_subtitle()

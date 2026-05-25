@@ -105,9 +105,9 @@ class SessionMixin(_MixinBase):
     # ── session 命名 ──────────────────────────────────────────────────────────
 
     def _update_subtitle(self) -> None:
-        nickname = get_nickname(self.agent.profile.name)
+        display = self.agent.display_name
         name = getattr(self, "_session_name", "")
-        self.sub_title = f"{nickname} · {name}" if name else nickname
+        self.sub_title = f"{display} · {name}" if name else display
 
     def _current_tab_id(self) -> str:
         from textual.widgets import TabbedContent

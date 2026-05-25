@@ -9,7 +9,7 @@ from loguru import logger
 from textual import work
 from textual.widgets import Collapsible, Markdown, Static
 
-from core.config import get_nickname
+
 from widgets.chat import AIMessage
 from widgets.input import HistoryInput
 from widgets.sidebar import Sidebar
@@ -85,7 +85,7 @@ class StreamingMixin(_MixinBase):
                 self._spin_label = "生成中"
                 buf.append(chunk)
                 if stream_msg is None:
-                    await msgs.mount(Static(f"🤖 {get_nickname(agent.profile.name)}", classes="ai-header", markup=False))
+                    await msgs.mount(Static(f"🤖 {agent.display_name}", classes="ai-header", markup=False))
                     stream_msg = AIMessage()
                     await msgs.mount(stream_msg)
                 now = asyncio.get_event_loop().time()
@@ -130,7 +130,7 @@ class StreamingMixin(_MixinBase):
                 stats = " · ".join(parts)
                 at_bot = _at_bottom()
                 await msgs.mount(Static(stats, classes="stats", markup=False))
-                self.sub_title = f"{get_nickname(agent.profile.name)} · {stats}"
+                self.sub_title = f"{agent.display_name} · {stats}"
                 self.query_one("#sidebar", Sidebar).refresh_git()
                 self.query_one("#file-tree", FileTree).refresh_tree()
                 if at_bot:
@@ -277,7 +277,7 @@ class StreamingMixin(_MixinBase):
             prompt.remove_class("streaming")
             self._update_prompt_title()
             prompt.disabled = False
-            prompt.placeholder = f"傳訊息給 {get_nickname(agent.profile.name)}..."
+            prompt.placeholder = f"傳訊息給 {agent.display_name}..."
             prompt.focus()
             if ephemeral and _history_snapshot is not None:
                 new_msgs = agent.history[len(_history_snapshot):]
