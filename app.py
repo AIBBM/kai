@@ -792,10 +792,9 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         sidebar = self.query_one("#sidebar", Sidebar)
         if tab_id in self._agent_tabs:
             self.agent = self._agent_tabs[tab_id]
-            display = self.agent.display_name
             prompt = self.query_one("#prompt", HistoryInput)
-            prompt.placeholder = f"傳訊息給 {display}..."
-            sidebar.set_model(display)
+            prompt.placeholder = f"傳訊息給 {self.agent.display_name}..."
+            sidebar.set_model(self.agent.profile.name)
             mcp_sum = self.agent.mcp_client.server_summary if self.agent.mcp_client else {}
             sidebar.set_mcp(mcp_sum)
             self._resumed_from = self._tab_resumed_from.get(tab_id, None)
@@ -805,10 +804,9 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         elif tab_id == "chat":
             if self._main_agent is not None:
                 self.agent = self._main_agent
-                display = self.agent.display_name
                 prompt = self.query_one("#prompt", HistoryInput)
-                prompt.placeholder = f"傳訊息給 {display}..."
-                sidebar.set_model(display)
+                prompt.placeholder = f"傳訊息給 {self.agent.display_name}..."
+                sidebar.set_model(self.agent.profile.name)
                 mcp_sum = self.agent.mcp_client.server_summary if self.agent.mcp_client else {}
                 sidebar.set_mcp(mcp_sum)
                 self._resumed_from = self._tab_resumed_from.get("chat", None)
