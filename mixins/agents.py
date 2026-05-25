@@ -184,7 +184,9 @@ class AgentsMixin(_MixinBase):
                 prompt.focus()
 
     async def _do_reload_agent(self) -> None:
-        """重新從 config.json 讀取 system_prompt，就地更新正在執行的 agent，不中斷對話。"""
+        """重新從 config.json 熱更新執行中的 agent：system_prompt、model、nickname 全部套用。
+        若 history.json 已被刪除，同步清除 in-memory history（否則 save_history 會把舊記憶寫回）。
+        """
         adir = self.agent._agent_dir
         if not adir:
             self.notify("目前 agent 沒有 config.json（主 chat 不支援此指令）", severity="warning")
@@ -193,21 +195,77 @@ class AgentsMixin(_MixinBase):
         if not config_path.exists():
             self.notify(f"找不到 {config_path}", severity="error")
             return
-        import json
+        import json as _json
         try:
-            data = json.loads(config_path.read_text(encoding="utf-8"))
+            data = _json.loads(config_path.read_text(encoding="utf-8"))
         except Exception as e:
             self.notify(f"讀取 config.json 失敗：{e}", severity="error")
             return
+
+        name = data.get("nickname") or data.get("name", adir.name)
+        changes: list[str] = []
+
+        # history.json 被手動刪除 → 清除 in-memory history，避免 save_history 還原
+        if not self.agent._history_file.exists():
+            self.agent.history = []
+            changes.append("history 清除")
+
+        # system_prompt
         new_prompt = data.get("system_prompt", "")
-        if not new_prompt:
-            self.notify("config.json 沒有 system_prompt 欄位", severity="warning")
-            return
-        self.agent._custom_system_prompt = new_prompt
+        if new_prompt and new_prompt != self.agent._custom_system_prompt:
+            self.agent._custom_system_prompt = new_prompt
+            changes.append("system_prompt")
+
+        # nickname
+        if name != self.agent._nickname:
+            self.agent._nickname = name
+            changes.append("nickname")
+
+        # model（需換 Agent 物件）
+        new_model = data.get("model", self.agent.profile.name)
+        if new_model != self.agent.profile.name:
+            if new_model not in REGISTRY:
+                self.notify(f"未知模型：{new_model}", severity="error")
+                return
+            old = self.agent
+            self.agent = Agent(
+                model=new_model,
+                history_file=old._history_file,
+                agent_dir=old._agent_dir,
+                system_prompt=new_prompt or old._custom_system_prompt,
+            )
+            self.agent.mcp_client = old.mcp_client
+            self.agent.mcp_context = getattr(old, "mcp_context", "")
+            self.agent._nickname = name
+            self.agent.history = old.history[:]  # 已清除過的話這裡就是 []
+            # 同步更新 _agent_tabs 映射
+            for tid, ag in list(self._agent_tabs.items()):
+                if ag is old:
+                    self._agent_tabs[tid] = self.agent
+                    break
+            changes.append(f"model → {new_model}")
+
         self.agent._rebuild_system_prompt()
         self.agent.save_history()
-        name = data.get("nickname") or data.get("name", adir.name)
-        self.notify(f"✅ {name} system prompt 已重載", timeout=3)
+
+        # 更新 UI
+        from widgets.sidebar import Sidebar
+        from widgets.input import HistoryInput
+        sidebar = self.query_one("#sidebar", Sidebar)
+        sidebar.set_model(self.agent.profile.name)
+        mcp_sum = self.agent.mcp_client.server_summary if self.agent.mcp_client else {}
+        sidebar.set_mcp(mcp_sum)
+        prompt = self.query_one("#prompt", HistoryInput)
+        prompt.placeholder = f"傳訊息給 {self.agent.display_name}..."
+        self._update_subtitle()
+        self._sync_cap_bar()
+
+        # history 清除時同步清空聊天畫面
+        if "history 清除" in changes:
+            await self._active_msgs().remove_children()
+
+        change_str = "、".join(changes) if changes else "（無變更）"
+        self.notify(f"✅ {name} 已重載：{change_str}", timeout=4)
 
     async def _do_list_agents(self) -> None:
         from core.agent_factory import list_agents
