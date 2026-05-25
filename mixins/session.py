@@ -13,7 +13,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import Static, TabbedContent
 
 from core.agent import Agent
-from core.config import _normalize, get_nickname
+from core.config import _normalize, ensure_kai_dir, get_nickname
 from core.models import REGISTRY
 from widgets.input import HistoryInput
 from widgets.sidebar import Sidebar
@@ -63,6 +63,7 @@ class SessionMixin(_MixinBase):
         self.agent.save_history()
         self._prev_cwd = os.getcwd()
         os.chdir(target)
+        ensure_kai_dir()
         # reset session state for new directory
         self._resumed_from = None
         self._tab_resumed_from["chat"] = None

@@ -115,8 +115,8 @@ class Agent:
         若有 _custom_system_prompt（agent factory 建立的 agent），直接使用，不走通用邏輯。
         """
         if self._custom_system_prompt is not None:
-            notes_root = self._agent_dir if self._agent_dir else Path(os.getcwd())
-            notes_path = notes_root / "AGENT_NOTES.md"
+            notes_root = self._agent_dir if self._agent_dir else Path(os.getcwd()) / ".kai"
+            notes_path = notes_root / "notes.md"
             notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
             content = self._resolve_prompt(self._custom_system_prompt, notes_root)
             if notes:
@@ -134,8 +134,8 @@ class Agent:
         has_filesystem = bool(tool_names & {"read_file", "write_file", "list_directory"})
         has_repomapper = bool(tool_names & {"repo_map", "search_identifiers"})
         cwd = os.getcwd()
-        notes_root = self._agent_dir if self._agent_dir else Path(cwd)
-        notes_path = notes_root / "AGENT_NOTES.md"
+        notes_root = self._agent_dir if self._agent_dir else Path(cwd) / ".kai"
+        notes_path = notes_root / "notes.md"
         notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
 
         # 動態生成已連線 server 清單
@@ -284,6 +284,7 @@ class Agent:
         rest = [m for m in self.history if m["role"] != "system"]
         to_save = system + rest[-(keep * 2):]
         try:
+            self._history_file.parent.mkdir(parents=True, exist_ok=True)
             self._history_file.write_text(
                 json.dumps(to_save, ensure_ascii=False, indent=2),
                 encoding="utf-8",

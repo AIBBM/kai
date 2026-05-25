@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .config import DEBUG_TOOLS
 
-_LOG_FILE = "tool_calls.log"
+_LOG_FILE = ".kai/tool_calls.log"
 _MAX_RESULT = 2000
 _SEPARATOR = "─" * 64
 
@@ -37,7 +37,9 @@ def _write_session_header() -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = f"\n{'═' * 64}\n  SESSION START  {ts}\n{'═' * 64}\n"
     try:
-        with _log_path().open("a", encoding="utf-8") as f:
+        p = _log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
             f.write(header)
     except Exception:
         pass

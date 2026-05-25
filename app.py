@@ -26,7 +26,7 @@ from textual.widgets import (
 )
 
 from core.agent import Agent
-from core.config import DEBUG_TOOLS, MODEL, USERNAME
+from core.config import DEBUG_TOOLS, MODEL, USERNAME, ensure_kai_dir
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
 from mixins.agents import AgentsMixin
@@ -42,16 +42,18 @@ from widgets.sidebar import ResizeHandle, Sidebar
 from widgets.tree import FileTree
 from widgets.utils import _IMAGE_EXTS
 
+ensure_kai_dir()  # 啟動時建立 .kai/，所有 kai runtime 檔案都存在此目錄
+
 logger.remove()
 logger.add(
-    "agent_tui.log",
+    ".kai/agent_tui.log",
     level="DEBUG",
     rotation="5 MB",
     retention=3,
     format="{time:HH:mm:ss} | {level:<5} | {message}",
 )
 
-PROMPT_HISTORY_FILE = Path(".prompt_history")
+PROMPT_HISTORY_FILE = Path(".kai/.prompt_history")
 # Mouse event debris that leaks into Input when Playwright/WSLg resets terminal mouse
 # tracking state. Textual consumes ESC and [ but the rest falls through as keystrokes:
 #   SGR full:    ESC[<35;80;25M  →  <35;80;25M  or  35;80;25M
@@ -518,8 +520,9 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                 if not arg:
                     self.notify("用法：/remember <要記住的內容>", severity="warning")
                 else:
-                    notes_root = self.agent._agent_dir or Path(os.getcwd())
-                    notes_path = notes_root / "AGENT_NOTES.md"
+                    notes_root = self.agent._agent_dir or Path(os.getcwd()) / ".kai"
+                    notes_root.mkdir(parents=True, exist_ok=True)
+                    notes_path = notes_root / "notes.md"
                     existing = notes_path.read_text(encoding="utf-8") if notes_path.exists() else ""
                     if f"- {arg}" in existing:
                         self.notify("已存在相同記錄，略過", severity="warning", timeout=3)
@@ -527,7 +530,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                         with open(notes_path, "a", encoding="utf-8") as _f:
                             _f.write(f"\n- {arg}")
                         self.agent._rebuild_system_prompt()
-                        self.notify("✅ 已記錄到 AGENT_NOTES.md", severity="information")
+                        self.notify("✅ 已記錄到 .kai/notes.md", severity="information")
                         self.query_one("#file-tree", FileTree).refresh_tree()
             elif cmd == "/compact":
                 await self.action_compact()
