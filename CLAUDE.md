@@ -43,7 +43,7 @@ core/
   tts.py            → TTS engine abstraction (edge-tts, melotts, kokoro-api, kokoro-onnx)
   file_picker.py    → prompt_toolkit file browser (used by main.py /image)
 mixins/             → ChatApp behaviour split into focused mixins (all inherit _MixinBase = ChatApp)
-  agents.py         → AgentsMixin: /create-agent, /load-agent, /list-agents
+  agents.py         → AgentsMixin: /create-agent, /load-agent, /list-agents, /reload-agent
   bash.py           → BashMixin: ! command execution
   mcp.py            → MCPMixin: /mcp-list, /mcp-reload, /mcp-add, /mcp-del
   session.py        → SessionMixin: /cd, /compact, /cls, /resume, /model, /rename, /nickname
@@ -87,7 +87,7 @@ widgets/
 | `FileTree` | widgets/tree.py | lazy-loading dir tree; double-click opens file tab; Ctrl+click / Space multi-select for batch delete; 2s deep fs watcher |
 | `RightClickTree` | widgets/tree.py | Tree subclass; intercepts right-click + Ctrl+click; Space/Ctrl+A/Escape key bindings |
 | `TreeContextMenu` | widgets/tree.py | ModalScreen right-click menu; shows "刪除選取 (N 項)" when multi-selected |
-| `FileViewer` | widgets/chat.py | TextArea with syntax highlighting + WSL-aware Ctrl+C multi-line copy; mtime polling for external change detection |
+| `FileViewer` | widgets/chat.py | TextArea with syntax highlighting + WSL-aware Ctrl+C multi-line copy; mtime polling for external change detection; Ctrl+S save, F2 save-as |
 | `AIMessage` | widgets/chat.py | AI response widget; Static stream-view during streaming, Markdown md-view on final |
 | `Sidebar` | widgets/sidebar.py | cwd / model / git status / MCP tools |
 | `ResizeHandle` | widgets/sidebar.py | drag-to-resize handle between file tree and center |
@@ -120,6 +120,7 @@ widgets/
 | `/create-agent <description>` | Use AI to design a new agent config in `agents/` |
 | `/load-agent <name>` | Load an agent config and spawn a new tab |
 | `/list-agents` | Show all agents in `agents/` (AgentsScreen picker) |
+| `/reload-agent` | Re-read `config.json` and hot-swap system prompt in running agent (no tab reload needed) |
 | `/tts <engine\|off>` | Switch TTS engine or disable: `edge-tts`, `melotts`, `kokoro-api`, `kokoro`, `off` |
 
 ### `!` bash commands
@@ -154,6 +155,14 @@ Multi-select state is cleared after delete and after `refresh_tree`.
 During streaming (`update_content(final=False)`): text is written to a `Static(markup=False)` widget using `RichText(overflow="fold")` — no markdown parsing, O(1) cost regardless of length.
 
 On completion (`update_content(final=True)`): `stream-view` is hidden, `md-view` (Markdown widget) is shown and rendered once. This prevents the slowdown where long responses got progressively slower to render.
+
+### Clickable non-Button widgets
+
+Avoid using `Button` for single-line or inline clickable labels. Textual's `Button` has a `border: tall` default that causes initial layout miscalculation (compositor renders 3-line height before CSS `border: none` takes effect), producing display corruption on first render that only resolves on focus.
+
+Use `Static` with `@on(events.Click, "#widget-id")` instead. Always call `event.stop()` in the handler to prevent the click from bubbling to `ChatApp.on_click` (which calls `screen.get_widget_at` — if a modal was just pushed in the same handler, that screen's compositor is not yet initialized and crashes).
+
+`ChatApp.on_click` wraps `screen.get_widget_at` in `try/except` as a defensive guard.
 
 ### Markdown rendering fixes
 
@@ -200,6 +209,8 @@ When pasting multiline text into the prompt:
 | `Ctrl+Z` | Undo in input |
 | `Space` (in tree) | Toggle current node in multi-select / range-select from anchor |
 | `Ctrl+A` (in tree) | Select all / deselect all |
+| `Ctrl+S` (FileViewer) | Save file |
+| `F2` (FileViewer) | Save As (Ctrl+Shift+S is indistinguishable from Ctrl+S in most terminals) |
 
 ## Agent (`core/agent.py`)
 
@@ -289,6 +300,12 @@ Each agent directory contains a `config.json`. All fields:
 | `melotts` | `"EN-US"` `"EN-BR"` `"EN-AU"` `"ZH"` | `"en"` `"zh"` `"fr"` `"jp"` |
 | `kokoro-api` | `"af_bella"` `"af_sky"` `"am_adam"` | `"en-us"` |
 | `kokoro` | `"af_sky"` `"af_bella"` | `"en-us"` `"en-gb"` |
+
+### Agent system prompt 更新
+
+`_load_history()` always strips `role: system` from `history.json` — the system message is always rebuilt from `_custom_system_prompt` (set from `config.json`) plus dynamic content (date, cwd, MCP context). Editing `history.json`'s system message has no effect.
+
+To update a running agent's system prompt: edit `agents/<name>/config.json` → run `/reload-agent`. The agent's `_custom_system_prompt` is updated and `_rebuild_system_prompt()` is called in-place; conversation history is preserved.
 
 ### `history_keep` 語義
 

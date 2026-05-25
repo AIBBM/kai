@@ -261,6 +261,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             ("/create-agent", "用 AI 設計新 agent  /create-agent <描述>"),
             ("/load-agent", "載入 agent 設定  /load-agent <name>"),
             ("/list-agents", "列出所有已建立的 agents"),
+            ("/reload-agent", "重新載入目前 agent 的 config.json（system prompt 熱更新）"),
             ("/tts", "切換 TTS 引擎  /tts <edge-tts|melotts|kokoro-api|kokoro|off>"),
             ("/tts edge-tts", "切換 TTS 為 edge-tts（雲端）"),
             ("/tts melotts", "切換 TTS 為 melotts（Docker 8886）"),
@@ -582,6 +583,8 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                     await self._do_load_agent(arg)
             elif cmd == "/list-agents":
                 await self._do_list_agents()
+            elif cmd == "/reload-agent":
+                await self._do_reload_agent()
             elif cmd == "/image":
                 if not self.agent.profile.supports_vision:
                     self.notify(

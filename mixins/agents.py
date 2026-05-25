@@ -181,6 +181,32 @@ class AgentsMixin(_MixinBase):
                 prompt.placeholder = f"傳訊息給 {get_nickname(agent.profile.name)}..."
                 prompt.focus()
 
+    async def _do_reload_agent(self) -> None:
+        """重新從 config.json 讀取 system_prompt，就地更新正在執行的 agent，不中斷對話。"""
+        adir = self.agent._agent_dir
+        if not adir:
+            self.notify("目前 agent 沒有 config.json（主 chat 不支援此指令）", severity="warning")
+            return
+        config_path = adir / "config.json"
+        if not config_path.exists():
+            self.notify(f"找不到 {config_path}", severity="error")
+            return
+        import json
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            self.notify(f"讀取 config.json 失敗：{e}", severity="error")
+            return
+        new_prompt = data.get("system_prompt", "")
+        if not new_prompt:
+            self.notify("config.json 沒有 system_prompt 欄位", severity="warning")
+            return
+        self.agent._custom_system_prompt = new_prompt
+        self.agent._rebuild_system_prompt()
+        self.agent.save_history()
+        name = data.get("nickname") or data.get("name", adir.name)
+        self.notify(f"✅ {name} system prompt 已重載", timeout=3)
+
     async def _do_list_agents(self) -> None:
         from core.agent_factory import list_agents
         from widgets.agents_screen import AgentsScreen
