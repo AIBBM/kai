@@ -85,6 +85,31 @@ class Agent:
         self._rebuild_system_prompt()
         self._load_history()
 
+    def _resolve_prompt(self, prompt: str, base_dir: Path) -> str:
+        """展開 prompt 中的模板變數與 {{include:file}} 指令。
+        {AGENT_DIR} → agent 目錄絕對路徑
+        {CWD}       → 目前工作目錄
+        {DATE}      → 今天日期 YYYY-MM-DD
+        {{include:filename}} → 載入 base_dir/filename 的文字內容
+        """
+        agent_dir_str = str(base_dir.resolve())
+        now = datetime.now().strftime("%Y-%m-%d")
+        result = prompt
+        result = result.replace("{AGENT_DIR}", agent_dir_str)
+        result = result.replace("{CWD}", os.getcwd())
+        result = result.replace("{DATE}", now)
+
+        def _do_include(m: re.Match) -> str:
+            fname = m.group(1).strip()
+            fpath = base_dir / fname
+            try:
+                return fpath.read_text(encoding="utf-8")
+            except Exception:
+                return f"[include not found: {fname}]"
+
+        result = re.sub(r"\{\{include:([^}]+)\}\}", _do_include, result)
+        return result
+
     def _rebuild_system_prompt(self):
         """重建 history[0] system message（日期、cwd、MCP context 每次都可能變）。
         若有 _custom_system_prompt（agent factory 建立的 agent），直接使用，不走通用邏輯。
@@ -93,7 +118,7 @@ class Agent:
             notes_root = self._agent_dir if self._agent_dir else Path(os.getcwd())
             notes_path = notes_root / "AGENT_NOTES.md"
             notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
-            content = self._custom_system_prompt
+            content = self._resolve_prompt(self._custom_system_prompt, notes_root)
             if notes:
                 content += f"\n\n## 📝 專案記憶\n{notes}\n\n以上規則必須嚴格遵守。"
             msg = {"role": "system", "content": content}

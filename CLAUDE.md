@@ -42,6 +42,7 @@ core/
   mcp_client.py     → MCP server lifecycle + tool dispatch
   tts.py            → TTS engine abstraction (edge-tts, melotts, kokoro-api, kokoro-onnx)
   file_picker.py    → prompt_toolkit file browser (used by main.py /image)
+  tool_log.py       → tool call debug log (append to tool_calls.log, only when DEBUG_TOOLS=1)
 mixins/             → ChatApp behaviour split into focused mixins (all inherit _MixinBase = ChatApp)
   agents.py         → AgentsMixin: /create-agent, /load-agent, /list-agents, /reload-agent
   bash.py           → BashMixin: ! command execution
@@ -273,12 +274,31 @@ Each agent directory contains a `config.json`. All fields:
 | `name` | ✓ | Agent 名稱（目錄名） |
 | `nickname` | | 顯示暱稱（tab 標題、header） |
 | `model` | ✓ | 使用的模型（需在 REGISTRY 內） |
-| `system_prompt` | ✓ | System prompt 全文 |
+| `system_prompt` | ✓ | System prompt 全文；支援模板變數（見下方） |
 | `description` | | 一行說明，`/list-agents` 顯示 |
 | `greeting` | | 全新對話時 AI 主動說第一句話的 prompt |
 | `history_keep` | | 記住幾個來回（pair）；預設用 env `HISTORY_KEEP=10` |
 | `mcp_servers` | | 額外 MCP servers（同 global 格式） |
 | `tts` | | TTS 設定（見下表）；省略則不啟用語音 |
+
+### `system_prompt` 模板變數
+
+`_resolve_prompt()` in `Agent` expands these before the prompt is sent:
+
+| 變數 | 展開為 |
+|------|--------|
+| `{AGENT_DIR}` | agent 目錄的絕對路徑 |
+| `{CWD}` | 目前工作目錄 |
+| `{DATE}` | 今天日期 `YYYY-MM-DD` |
+| `{{include:filename}}` | 載入 `<agent_dir>/filename` 的文字內容 |
+
+展開時機：`/load-agent`、`/list-agents` 選擇、`/reload-agent`、`/cd`。
+
+```json
+{
+  "system_prompt": "你的工作目錄是 {AGENT_DIR}。\n\n以下是 API 文件：\n{{include:api_docs.md}}"
+}
+```
 
 ### `tts` 欄位
 
@@ -330,7 +350,7 @@ Disabled servers use a `_` prefix in `mcp_servers.json` (e.g. `_playwright`, `_t
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MODEL` | `qwen3-vl:4b` | Active model |
-| `DEBUG_TOOLS` | `0` | Set `1` to enable tool debug cards on startup |
+| `DEBUG_TOOLS` | `0` | Set `1` to enable tool debug cards in UI + append tool calls (name/args/result) to `tool_calls.log` in cwd |
 | `NUM_CTX` | `0` | Context window override (0 = model default) |
 | `MAX_TOOL_CALLS` | `15` | Max tool calls per turn |
 | `TEMPERATURE` | `0.6` | Generation temperature |
