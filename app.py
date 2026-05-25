@@ -42,16 +42,8 @@ from widgets.sidebar import ResizeHandle, Sidebar
 from widgets.tree import FileTree
 from widgets.utils import _IMAGE_EXTS
 
-ensure_kai_dir()  # 啟動時建立 .kai/，所有 kai runtime 檔案都存在此目錄
-
 logger.remove()
-logger.add(
-    ".kai/agent_tui.log",
-    level="DEBUG",
-    rotation="5 MB",
-    retention=3,
-    format="{time:HH:mm:ss} | {level:<5} | {message}",
-)
+# logger.add 在 main block 的 os.chdir 之後才真正加入，這裡只移除預設 handler
 
 PROMPT_HISTORY_FILE = Path(".kai/.prompt_history")
 # Mouse event debris that leaks into Input when Playwright/WSLg resets terminal mouse
@@ -933,4 +925,13 @@ if __name__ == "__main__":
             print(f"錯誤：{target} 不是有效的目錄")
             raise SystemExit(1)
         os.chdir(target)
+    # chdir 後才建 .kai/ 和設定 log，確保落在正確的目錄
+    ensure_kai_dir()
+    logger.add(
+        ".kai/agent_tui.log",
+        level="DEBUG",
+        rotation="5 MB",
+        retention=3,
+        format="{time:HH:mm:ss} | {level:<5} | {message}",
+    )
     ChatApp().run()
