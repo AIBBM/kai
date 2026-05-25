@@ -27,7 +27,7 @@ from textual.widgets import (
 
 from core.agent import Agent
 import core.config as _kai_cfg
-from core.config import DEBUG_TOOLS, USERNAME, apply_kai_config, ensure_kai_dir, load_kai_config
+from core.config import USERNAME, apply_kai_config, ensure_kai_dir, load_kai_config
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
 from mixins.agents import AgentsMixin
@@ -139,7 +139,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         self._spin_idx = 0
         self._spin_label = "生成中"
         self._at_mention_re = re.compile(r'(?:(?<=\s)|^)@(\S+)')
-        self._debug_tools = DEBUG_TOOLS
+        self._debug_tools = _kai_cfg.DEBUG_TOOLS
         self._think_override: bool | None = None
         self._input_history: list[str] = _load_prompt_history()
         self._history_idx: int = -1
