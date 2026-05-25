@@ -887,10 +887,21 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         self.query_one("#sidebar-handle", ResizeHandle).display = sidebar.display
 
     def _active_msgs(self) -> VerticalScroll:
-        """回傳目前 active tab 的訊息容器。"""
+        """回傳目前 agent 對應的訊息容器。
+        以 self.agent 為主索引：避免 tc.active 與 self.agent 因非同步事件不同步時
+        把 subagent 的回覆送到 main chat。
+        """
+        # subagent：直接找對應 tab 的 VerticalScroll
+        for tab_id, agent in self._agent_tabs.items():
+            if agent is self.agent:
+                try:
+                    return self.query_one(f"TabPane#{tab_id}", TabPane).query_one(VerticalScroll)
+                except Exception:
+                    break
+        # main agent 或找不到 agent tab：用 tc.active 決定
         tc = self.query_one("#center-tabs", TabbedContent)
         active = tc.active
-        if active == "chat":
+        if active == "chat" or active not in self._agent_tabs:
             return self.query_one("#messages", VerticalScroll)
         try:
             return self.query_one(f"TabPane#{active}", TabPane).query_one(VerticalScroll)
