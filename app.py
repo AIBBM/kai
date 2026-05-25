@@ -26,7 +26,8 @@ from textual.widgets import (
 )
 
 from core.agent import Agent
-from core.config import DEBUG_TOOLS, MODEL, USERNAME, ensure_kai_dir
+import core.config as _kai_cfg
+from core.config import DEBUG_TOOLS, USERNAME, apply_kai_config, ensure_kai_dir, load_kai_config
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
 from mixins.agents import AgentsMixin
@@ -133,7 +134,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             MarkdownTableCellContents.with_tooltip = lambda self, *a, **kw: self  # noqa: ARG005
         except Exception:
             pass
-        self.agent = Agent(model=MODEL)
+        self.agent = Agent(model=_kai_cfg.MODEL)
         self.scroll_sensitivity_y = 5.0
         self._spin_idx = 0
         self._spin_label = "生成中"
@@ -183,7 +184,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             yield Sidebar(id="sidebar")
         with Horizontal(id="input-row"):
             yield Static("📎", id="attach-btn", classes="attach-btn")
-            yield HistoryInput(placeholder=f"傳訊息給 {MODEL}...", id="prompt")
+            yield HistoryInput(placeholder=f"傳訊給 {_kai_cfg.MODEL}...", id="prompt")
         yield ChatAutoComplete(target="#prompt", candidates=None)
         with Horizontal(id="cap-bar"):
             yield CapabilityBadge("think", "think")
@@ -192,7 +193,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
 
     def on_mount(self) -> None:
         self.title = "kai"
-        self.sub_title = MODEL
+        self.sub_title = _kai_cfg.MODEL
         self._main_agent = self.agent  # 記住主 chat agent，切回 chat tab 時還原
         # 讓主 chat AI 能呼叫 open_agent 工具開啟副 agent tab
         _app = self
@@ -927,6 +928,7 @@ if __name__ == "__main__":
         os.chdir(target)
     # chdir 後才建 .kai/ 和設定 log，確保落在正確的目錄
     ensure_kai_dir()
+    apply_kai_config(load_kai_config())
     logger.add(
         ".kai/agent_tui.log",
         level="DEBUG",

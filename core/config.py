@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -54,6 +55,35 @@ def ensure_kai_dir() -> Path:
     d = Path(".kai")
     d.mkdir(exist_ok=True)
     return d
+
+
+def load_kai_config() -> dict:
+    """讀取 ~/.kai/config.json（全域）+ cwd/.kai/config.json（專案），shallow merge。
+    專案設定優先；兩者皆不存在時回傳 {}。
+    """
+    def _read(path: Path) -> dict:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    global_cfg = _read(Path.home() / ".kai" / "config.json")
+    local_cfg = _read(Path(".kai") / "config.json")
+    return {**global_cfg, **local_cfg}
+
+
+def apply_kai_config(cfg: dict) -> None:
+    """將 config dict 套用到 module globals。
+    支援：model、history_keep、debug_tools。
+    """
+    g = globals()
+    if "model" in cfg:
+        g["MODEL"] = str(cfg["model"])
+    if "history_keep" in cfg:
+        g["HISTORY_KEEP"] = int(cfg["history_keep"])
+    if "debug_tools" in cfg:
+        v = cfg["debug_tools"]
+        g["DEBUG_TOOLS"] = bool(v) if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes")
 
 # 只輸出 DEBUG 以上的 log 到 stderr，不干擾 stdout 的對話輸出
 logger.remove()
