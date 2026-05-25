@@ -261,6 +261,7 @@ AutoComplete .autocomplete--highlight-match {
     border: round $primary;
     margin: 0 1 0 1;
     background: $boost;
+    scrollbar-size-horizontal: 0;
 }
 
 #prompt:focus {

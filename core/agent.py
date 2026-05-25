@@ -23,6 +23,7 @@ from .config import (
     get_nickname,
 )
 from .models import ModelProfile, get_profile
+from .tool_log import log_tool_call, log_turn_start
 from .tools import (
     BASH_TOOL,
     FETCH_URLS_TOOL,
@@ -359,6 +360,7 @@ class Agent:
         self._t_thinking_end: float | None = None
         tool_call_count = 0
         _tool_call_log: list[str] = []  # 記錄本輪所有工具呼叫，hit 上限時寫入進度摘要
+        log_turn_start(len(self.history))
         while True:
             reply_parts: list[str] = []
             tool_calls: list = []
@@ -473,10 +475,11 @@ class Agent:
                     self.history.pop()
                 return
 
-            if on_tool_call:
-                for tc, (fn_name, result) in zip(tool_calls, results):
-                    raw = getattr(tc.function, "arguments", {})
-                    args = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            for tc, (fn_name, result) in zip(tool_calls, results):
+                raw = getattr(tc.function, "arguments", {})
+                args = json.loads(raw) if isinstance(raw, str) else dict(raw)
+                log_tool_call(fn_name, args, result)
+                if on_tool_call:
                     await on_tool_call(fn_name, args, result)
             for _fn, _ in results:
                 _tool_call_log.append(_fn)
