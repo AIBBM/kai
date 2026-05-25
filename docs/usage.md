@@ -40,27 +40,6 @@
 
 ---
 
-### `/add` — 加入 context 檔案
-
-```
-/add src/main.py
-/add docs/spec.md
-```
-
-將指定檔案內容加入 context，之後的對話模型都會參考該檔案。已加入的檔案會列在右側 Sidebar。
-
----
-
-### `/del` — 移除 context 檔案
-
-```
-/del src/main.py
-```
-
-從 context 移除指定檔案。
-
----
-
 ### `/cd` — 切換工作目錄
 
 ```

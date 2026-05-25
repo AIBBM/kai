@@ -4,10 +4,11 @@ from __future__ import annotations
 import os
 import subprocess
 
-from textual import events, work
+from textual import events, on, work
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Static
+from textual_fspicker import SelectDirectory
 
 from core.config import MODEL
 
@@ -56,10 +57,10 @@ class ResizeHandle(Widget):
 
 
 class Sidebar(Widget):
-    """工作目錄、上下文檔案、模型、Git 狀態側邊欄。"""
+    """工作目錄、模型、Git 狀態側邊欄。"""
 
     def compose(self) -> ComposeResult:
-        yield Static("📂 工作目錄", classes="sidebar-title", markup=True)
+        yield Static("📂 工作目錄", id="sb-cwd-btn", classes="sidebar-title-btn", markup=False)
         yield Static(os.getcwd(), classes="sidebar-content", id="sb-cwd", markup=False)
         yield Static("🤖 模型", classes="sidebar-title", markup=True)
         yield Static(MODEL, classes="sidebar-content", id="sb-model", markup=False)
@@ -75,6 +76,20 @@ class Sidebar(Widget):
 
     def on_mount(self) -> None:
         self._refresh_git_worker()
+
+    @on(events.Click, "#sb-cwd-btn")
+    async def _on_cwd_clicked(self, event: events.Click) -> None:
+        event.stop()
+        async def _on_dir_selected(path) -> None:
+            if path:
+                try:
+                    await self.app._do_cd(str(path))
+                except Exception as e:
+                    self.app.notify(f"切換失敗：{e}", severity="error")
+        self.app.push_screen(
+            SelectDirectory(os.getcwd(), title="切換工作目錄"),
+            callback=_on_dir_selected,
+        )
 
     @work(thread=True)
     def _refresh_git_worker(self) -> None:

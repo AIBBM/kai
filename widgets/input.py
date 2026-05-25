@@ -34,6 +34,9 @@ class HistoryInput(Input):
         else:
             self.screen.focus_next()
 
+    # 超過此字元數自動壓縮成 marker，避免 Input 出現 scroll-x
+    _COMPRESS_THRESHOLD: int = 200
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._undo_stack: list[tuple[str, int]] = []
@@ -42,9 +45,39 @@ class HistoryInput(Input):
         self._real_placeholder: str = ""  # saved when ghost text swaps placeholder
         self._pending_prediction: str = ""  # last prediction, for re-show on empty
 
+    # ── 長文字壓縮 ─────────────────────────────────────────────────────────────
+
+    def _compress(self, text: str) -> None:
+        """把長文字壓縮成 marker 格式，避免 Input 橫向 scroll。
+        若 text 中含舊 marker，先展開成真實內容再重壓縮，確保 submit 時內容正確。"""
+        if self._multiline_marker and self._multiline_paste and self._multiline_marker in text:
+            text = text.replace(self._multiline_marker, self._multiline_paste, 1)
+        self._multiline_paste = text
+        preview = text[:40] + ("…" if len(text) > 40 else "")
+        marker = f"[{len(text)} 字元] {preview}"
+        self._multiline_marker = marker
+        self.value = marker
+        self.cursor_position = len(marker)
+
+    # ── paste ──────────────────────────────────────────────────────────────────
+
     def on_paste(self, event: events.Paste) -> None:
+        # 連續貼上：若整個 input 就是舊 marker，清空重來（取代語意，非累加）
+        if self._multiline_paste is not None and self.value == self._multiline_marker:
+            self._multiline_paste = None
+            self._multiline_marker = None
+            self.value = ""
+            self.cursor_position = 0
+
         text = event.text
         if "\n" not in text and "\r" not in text:
+            # 單行貼上：若貼後總長超過閾值，壓縮（移除 _multiline_paste is None 限制）
+            combined = (
+                self.value[: self.cursor_position] + text + self.value[self.cursor_position :]
+            )
+            if len(combined) > self._COMPRESS_THRESHOLD:
+                event.prevent_default()
+                self._compress(combined)
             return
         event.prevent_default()
         raw = text.replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -76,6 +109,16 @@ class HistoryInput(Input):
                 self._real_placeholder = self.placeholder
             self.placeholder = text
 
+    def _is_marker(self, value: str) -> bool:
+        return value.startswith("[") and ("字元]" in value or "行]" in value)
+
+    def _watch_selection(self, selection: object) -> None:
+        """修正 Textual bug：_watch_selection 在 scroll_to_region 前設 cursor_position，
+        導致 terminal cursor（綠）與 soft cursor（灰）位移。scroll 後重設一次。"""
+        super()._watch_selection(selection)  # type: ignore[arg-type]
+        if self.has_focus:
+            self.app.cursor_position = self.cursor_screen_offset
+
     def _watch_value(self, value: str) -> None:
         super()._watch_value(value)  # 父類會清掉 _suggestion
         if value and self._real_placeholder:
@@ -83,6 +126,9 @@ class HistoryInput(Input):
             self._real_placeholder = ""
         elif not value and not self._real_placeholder and self._pending_prediction:
             self.show_prediction(self._pending_prediction)
+        # 同步壓縮：marker 固定 < 200 字元，不會觸發此條件，無無限迴圈問題
+        if len(value) > self._COMPRESS_THRESHOLD and not self._is_marker(value):
+            self._compress(value)
 
     def _on_key(self, event: events.Key) -> None:
         if event.key == "right" and self._real_placeholder and not self.value:
@@ -134,6 +180,8 @@ class ChatAutoComplete(AutoComplete):
         text = state.text
         if text.startswith("/image "):
             return text[7:]
+        if text.startswith("/cd "):
+            return text[4:]
         if text.startswith("/"):
             return text
         at = self._at_prefix(text)
@@ -154,7 +202,7 @@ class ChatAutoComplete(AutoComplete):
 
     def should_show_dropdown(self, search_string: str) -> bool:
         text = self._target_state.text
-        if text.startswith("/image "):
+        if text.startswith(("/image ", "/cd ")):
             return self.option_list.option_count > 0
         if self._at_prefix(text) is not None:
             return self.option_list.option_count > 0
@@ -164,6 +212,8 @@ class ChatAutoComplete(AutoComplete):
         text = state.text
         if text.startswith("/image "):
             return self._image_items(text[7:])
+        if text.startswith("/cd "):
+            return self._dir_items(text[4:])
         if text.startswith("/"):
             cmds = getattr(self.app, "SLASH_COMMANDS", [])
             return [

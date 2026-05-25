@@ -9,7 +9,7 @@ from loguru import logger
 from textual import work
 from textual.widgets import Collapsible, Markdown, Static
 
-from core.config import get_nickname
+
 from widgets.chat import AIMessage
 from widgets.input import HistoryInput
 from widgets.sidebar import Sidebar
@@ -27,17 +27,20 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 class StreamingMixin(_MixinBase):
     @work(exclusive=True)
-    async def _send(self, text: str, images: list[str] | None = None, ephemeral: bool = False) -> None:
+    async def _send(self, text: str, images: list[str] | None = None, ephemeral: bool = False, original_text: str | None = None) -> None:
+        # 快照 agent 與 msgs：worker 執行期間 self.agent 可能因 tab 切換被替換，
+        # 固定使用送出當下的 agent，避免回覆跑到錯誤的 tab。
+        agent = self.agent
         msgs = self._active_msgs()
         prompt = self.query_one("#prompt", HistoryInput)
         stream_msg: AIMessage | None = None
         buf: list[str] = []
 
-        self.agent._cancelled = False
+        agent._cancelled = False
         if not ephemeral:
             self._resumed_from = None
             # 清除持久化 resume 狀態：有新訊息代表已脫離 resume 快照
-            _state = self.agent._history_file.resolve().parent / ".history" / ".resumed_from"
+            _state = agent._history_file.resolve().parent / ".history" / ".resumed_from"
             _state.unlink(missing_ok=True)
             try:
                 from textual.widgets import TabbedContent
@@ -45,7 +48,7 @@ class StreamingMixin(_MixinBase):
                 self._tab_resumed_from.pop(tab_id, None)
             except Exception:
                 pass
-        _history_snapshot = [m.copy() for m in self.agent.history] if ephemeral else None
+        _history_snapshot = [m.copy() for m in agent.history] if ephemeral else None
         self._spin_idx = 0
         self._spin_label = "等待回覆"
 
@@ -82,7 +85,7 @@ class StreamingMixin(_MixinBase):
                 self._spin_label = "生成中"
                 buf.append(chunk)
                 if stream_msg is None:
-                    await msgs.mount(Static(f"🤖 {get_nickname(self.agent.profile.name)}", classes="ai-header", markup=False))
+                    await msgs.mount(Static(f"🤖 {agent.display_name}", classes="ai-header", markup=False))
                     stream_msg = AIMessage()
                     await msgs.mount(stream_msg)
                 now = asyncio.get_event_loop().time()
@@ -99,7 +102,7 @@ class StreamingMixin(_MixinBase):
             async def on_done(elapsed, thinking_s, gen_tok, prompt_tok) -> None:
                 # 取 agent 已處理好的最終內容（已正確剝離 <next> 標籤），
                 # 避免 buf regex 在 <next> 非結尾時截錯
-                _hist = self.agent.history
+                _hist = agent.history
                 if _hist and _hist[-1]["role"] == "assistant":
                     _display = str(_hist[-1]["content"])
                 else:
@@ -115,25 +118,25 @@ class StreamingMixin(_MixinBase):
                 if gen_tok:
                     parts.append(f"{gen_tok} tokens")
                 if prompt_tok:
-                    if self.agent.profile.backend == "ollama":
-                        num_ctx = self.agent.profile.num_ctx
+                    if agent.profile.backend == "ollama":
+                        num_ctx = agent.profile.num_ctx
                         pct = prompt_tok * 100 // num_ctx
                         parts.append(f"ctx {pct}% ({prompt_tok}/{num_ctx})")
                     else:
                         parts.append(f"輸入 {prompt_tok} tokens")
-                cache_hit = self.agent._last_cache_hit
+                cache_hit = agent._last_cache_hit
                 if cache_hit is not None and prompt_tok:
                     parts.append(f"cache {cache_hit * 100 // prompt_tok}%")
                 stats = " · ".join(parts)
                 at_bot = _at_bottom()
                 await msgs.mount(Static(stats, classes="stats", markup=False))
-                self.sub_title = f"{get_nickname(self.agent.profile.name)} · {stats}"
+                self.sub_title = f"{agent.display_name} · {stats}"
                 self.query_one("#sidebar", Sidebar).refresh_git()
                 self.query_one("#file-tree", FileTree).refresh_tree()
                 if at_bot:
                     msgs.scroll_end(animate=False)
                 # TTS：整段回覆完成後一次播放，等前一個完全結束才開新的
-                _tts_cfg = getattr(self.agent, "_tts_config", None)
+                _tts_cfg = getattr(agent, "_tts_config", None)
                 if _tts_cfg and _display and not ephemeral:
                     from core.tts import speak
                     from loguru import logger as _log
@@ -210,11 +213,11 @@ class StreamingMixin(_MixinBase):
                 if stream_msg:
                     await stream_msg.update_content("")
 
-            self.agent.profile.supports_thinking = self._thinking_active()
+            agent.profile.supports_thinking = self._thinking_active()
             user_msg: dict = {"role": "user", "content": text}
             if images:
                 user_msg["images"] = images
-            await self.agent.chat(
+            await agent.chat(
                 user_msg,
                 on_token=on_token,
                 on_thinking=on_thinking,
@@ -225,19 +228,29 @@ class StreamingMixin(_MixinBase):
 
         except Exception as e:
             err_str = str(e).lower()
-            if any(kw in err_str for kw in ("context", "too long", "window", "kv cache")) and (self.agent._gemini or self.agent._deepseek):
+            _overflow_kws = (
+                "context", "too long", "window", "kv cache",
+                "resource_exhausted", "maximum context", "exceeds the maximum",
+                "token limit", "context length", "prompt is too long",
+                "reduce the length",
+            )
+            if any(kw in err_str for kw in _overflow_kws) and (agent._gemini or agent._deepseek):
                 logger.warning(f"context overflow，啟動 autocompact：{e}")
                 try:
                     await msgs.mount(Static("⚡ Context 已滿，正在用 Gemini 壓縮對話歷史…", classes="error-msg", markup=False))
                     msgs.scroll_end(animate=False)
-                    await self.agent.compact_history()
+                    await agent.compact_history()
                     logger.info("autocompact 完成，重試對話")
                     await msgs.mount(Static("✅ 已壓縮，繼續對話", classes="error-msg", markup=False))
                     msgs.scroll_end(animate=False)
                     stream_msg = None
                     buf.clear()
-                    await self.agent.chat(
-                        user_msg,
+                    retry_content = original_text if original_text else text
+                    retry_msg: dict = {"role": "user", "content": retry_content}
+                    if images:
+                        retry_msg["images"] = images
+                    await agent.chat(
+                        retry_msg,
                         on_token=on_token,
                         on_thinking=on_thinking,
                         on_done=on_done,
@@ -264,18 +277,18 @@ class StreamingMixin(_MixinBase):
             prompt.remove_class("streaming")
             self._update_prompt_title()
             prompt.disabled = False
-            prompt.placeholder = f"傳訊息給 {get_nickname(self.agent.profile.name)}..."
+            prompt.placeholder = f"傳訊息給 {agent.display_name}..."
             prompt.focus()
             if ephemeral and _history_snapshot is not None:
-                new_msgs = self.agent.history[len(_history_snapshot):]
+                new_msgs = agent.history[len(_history_snapshot):]
                 self._last_ephemeral = new_msgs if new_msgs else None
-                self.agent.history = _history_snapshot
-                self.agent.save_history()
+                agent.history = _history_snapshot
+                agent.save_history()
                 if self._last_ephemeral:
                     self.notify("💾 /save 可將此回答存入對話歷史", timeout=4)
 
         if not ephemeral:
-            prediction = self.agent.last_prediction
+            prediction = agent.last_prediction
             if prediction:
                 prompt.show_prediction(prediction)
             _pending = getattr(self, "_pending_open_agent", None)

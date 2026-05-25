@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from textual.worker import Worker
 
 from loguru import logger
-from textual import events, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
@@ -26,7 +26,7 @@ from textual.widgets import (
 )
 
 from core.agent import Agent
-from core.config import DEBUG_TOOLS, MODEL, USERNAME, get_nickname
+from core.config import DEBUG_TOOLS, MODEL, USERNAME
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
 from mixins.agents import AgentsMixin
@@ -188,6 +188,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             yield ResizeHandle("sidebar", id="sidebar-handle", right_anchor=True)
             yield Sidebar(id="sidebar")
         with Horizontal(id="input-row"):
+            yield Static("📎", id="attach-btn", classes="attach-btn")
             yield HistoryInput(placeholder=f"傳訊息給 {MODEL}...", id="prompt")
         yield ChatAutoComplete(target="#prompt", candidates=None)
         with Horizontal(id="cap-bar"):
@@ -260,6 +261,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             ("/create-agent", "用 AI 設計新 agent  /create-agent <描述>"),
             ("/load-agent", "載入 agent 設定  /load-agent <name>"),
             ("/list-agents", "列出所有已建立的 agents"),
+            ("/reload-agent", "重新載入目前 agent 的 config.json（system prompt 熱更新）"),
             ("/tts", "切換 TTS 引擎  /tts <edge-tts|melotts|kokoro-api|kokoro|off>"),
             ("/tts edge-tts", "切換 TTS 為 edge-tts（雲端）"),
             ("/tts melotts", "切換 TTS 為 melotts（Docker 8886）"),
@@ -282,7 +284,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         """核心渲染邏輯，可指定目標 scroll 與 agent（供 agent tab 直接呼叫）。"""
         widgets: list = []
         ai_updates: list[tuple[AIMessage, str]] = []
-        nickname = get_nickname(agent.profile.name)
+        nickname = agent.display_name
 
         for msg in agent.history:
             role = msg.get("role")
@@ -420,6 +422,37 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             prompt.value = self._input_history[-(self._history_idx + 1)]
         prompt.cursor_position = len(prompt.value)
 
+    @on(events.Click, "#attach-btn")
+    async def _on_attach_clicked(self, event: events.Click) -> None:
+        event.stop()
+        from textual_fspicker import FileOpen, Filters
+        _filters = Filters(
+            ("圖片", lambda p: p.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}),
+            ("文字", lambda p: p.suffix.lower() in {".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ts", ".js", ".html", ".css"}),
+            ("所有檔案", lambda p: True),
+        )
+
+        async def _on_attach(path) -> None:
+            if path:
+                from pathlib import Path as _Path
+                p = _Path(path)
+                prompt = self.query_one("#prompt", HistoryInput)
+                if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+                    prompt.value = f"/image {p} "
+                else:
+                    cur = prompt.value
+                    insert = f"@{p} "
+                    if cur and not cur.endswith(" "):
+                        insert = " " + insert
+                    prompt.value = cur + insert
+                prompt.cursor_position = len(prompt.value)
+                prompt.focus()
+
+        self.push_screen(
+            FileOpen(os.getcwd(), title="選擇附件", filters=_filters),
+            callback=_on_attach,
+        )
+
     def on_paste(self, event: events.Paste) -> None:
         if _MOUSE_SEQ.search(event.text):
             event.prevent_default()
@@ -522,7 +555,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                                 await self._do_cd(str(path))
                             except Exception as e:
                                 self.notify(f"切換失敗：{e}", severity="error")
-                    await self.push_screen_wait(
+                    self.push_screen(
                         SelectDirectory(os.getcwd(), title="切換目錄"),
                         callback=_on_dir_selected,
                     )
@@ -550,6 +583,8 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                     await self._do_load_agent(arg)
             elif cmd == "/list-agents":
                 await self._do_list_agents()
+            elif cmd == "/reload-agent":
+                await self._do_reload_agent()
             elif cmd == "/image":
                 if not self.agent.profile.supports_vision:
                     self.notify(
@@ -563,12 +598,10 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                     )
                     async def _on_image_selected(path: Path | None) -> None:
                         if path:
-                            q = "請分析這張圖片"
-                            msgs = self._active_msgs()
-                            await msgs.mount(ImageBubble(str(path), q))
-                            msgs.scroll_end(animate=False)
-                            self._send(q, images=[str(path)])
-                    await self.push_screen_wait(
+                            prompt.value = f"/image {path} "
+                            prompt.cursor_position = len(prompt.value)
+                            prompt.focus()
+                    self.push_screen(
                         FileOpen(os.getcwd(), title="選擇圖片", filters=_img_filters),
                         callback=_on_image_selected,
                     )
@@ -607,7 +640,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         else:
             full_text = text
 
-        self._send(full_text)
+        self._send(full_text, original_text=text)
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
@@ -620,6 +653,9 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
     _AT_SKIP_SUFFIXES = frozenset({
         ".pyc", ".pyo", ".so", ".dll", ".exe",
         ".o", ".a", ".lib", ".obj",
+    })
+    _AT_IMAGE_SUFFIXES = frozenset({
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tiff", ".svg",
     })
 
     def _dir_tree(self, root: Path, prefix: str = "", depth: int = 0) -> list[str]:
@@ -656,6 +692,9 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                     continue
                 seen.add(str(p))
                 if p.is_file():
+                    if p.suffix.lower() in self._AT_IMAGE_SUFFIXES:
+                        self.notify(f"@{p.name} 是圖片，請改用 /image 指令", severity="warning", timeout=3)
+                        continue
                     files.append((str(p), p.read_text(encoding="utf-8", errors="replace")))
                 elif p.is_dir():
                     tree_lines = [p.name + "/"] + self._dir_tree(p)
@@ -731,7 +770,10 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         self.query_one("#file-tree-handle", ResizeHandle).display = ft.display
 
     async def on_click(self, event: events.Click) -> None:
-        widget, region = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        try:
+            widget, region = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        except Exception:
+            return
         wid = widget.id or "" if widget else ""
         if not wid.startswith("--content-tab-") or wid == "--content-tab-chat":
             return
@@ -747,11 +789,14 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         tab_id = pane.id if pane else None
         if not tab_id:
             return
+        sidebar = self.query_one("#sidebar", Sidebar)
         if tab_id in self._agent_tabs:
             self.agent = self._agent_tabs[tab_id]
-            nickname = get_nickname(self.agent.profile.name)
             prompt = self.query_one("#prompt", HistoryInput)
-            prompt.placeholder = f"傳訊息給 {nickname}..."
+            prompt.placeholder = f"傳訊息給 {self.agent.display_name}..."
+            sidebar.set_model(self.agent.profile.name)
+            mcp_sum = self.agent.mcp_client.server_summary if self.agent.mcp_client else {}
+            sidebar.set_mcp(mcp_sum)
             self._resumed_from = self._tab_resumed_from.get(tab_id, None)
             self._session_name = self._tab_session_names.get(tab_id, "")
             self._update_subtitle()
@@ -759,9 +804,11 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         elif tab_id == "chat":
             if self._main_agent is not None:
                 self.agent = self._main_agent
-                nickname = get_nickname(self.agent.profile.name)
                 prompt = self.query_one("#prompt", HistoryInput)
-                prompt.placeholder = f"傳訊息給 {nickname}..."
+                prompt.placeholder = f"傳訊息給 {self.agent.display_name}..."
+                sidebar.set_model(self.agent.profile.name)
+                mcp_sum = self.agent.mcp_client.server_summary if self.agent.mcp_client else {}
+                sidebar.set_mcp(mcp_sum)
                 self._resumed_from = self._tab_resumed_from.get("chat", None)
                 self._session_name = self._tab_session_names.get("chat", "")
                 self._update_subtitle()
@@ -840,10 +887,21 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         self.query_one("#sidebar-handle", ResizeHandle).display = sidebar.display
 
     def _active_msgs(self) -> VerticalScroll:
-        """回傳目前 active tab 的訊息容器。"""
+        """回傳目前 agent 對應的訊息容器。
+        以 self.agent 為主索引：避免 tc.active 與 self.agent 因非同步事件不同步時
+        把 subagent 的回覆送到 main chat。
+        """
+        # subagent：直接找對應 tab 的 VerticalScroll
+        for tab_id, agent in self._agent_tabs.items():
+            if agent is self.agent:
+                try:
+                    return self.query_one(f"TabPane#{tab_id}", TabPane).query_one(VerticalScroll)
+                except Exception:
+                    break
+        # main agent 或找不到 agent tab：用 tc.active 決定
         tc = self.query_one("#center-tabs", TabbedContent)
         active = tc.active
-        if active == "chat":
+        if active == "chat" or active not in self._agent_tabs:
             return self.query_one("#messages", VerticalScroll)
         try:
             return self.query_one(f"TabPane#{active}", TabPane).query_one(VerticalScroll)

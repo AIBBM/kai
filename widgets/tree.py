@@ -16,6 +16,7 @@ from textual.widget import Widget
 from textual.widgets import Button, Label, OptionList, Tree
 from textual.widgets._tree import TreeNode
 
+from textual_fspicker import FileSave
 from .utils import _HIDDEN_DIRS, _copy_to_clipboard, _file_icon
 
 
@@ -169,7 +170,8 @@ class TreeContextMenu(ModalScreen):
     """
 
     _OPT_COPY = 0
-    _OPT_DELETE = 1
+    _OPT_NEW_FILE = 1
+    _OPT_DELETE = 2
 
     def __init__(self, path: Path | None, sx: int, sy: int) -> None:
         super().__init__()
@@ -187,10 +189,10 @@ class TreeContextMenu(ModalScreen):
 
         if len(selected) >= 2 and self._path in selected:
             self._batch_paths = list(selected)
-            yield OptionList("複製檔名", f"刪除選取 ({len(selected)} 項)", id="ctx-options")
+            yield OptionList("複製檔名", "新增檔案", f"刪除選取 ({len(selected)} 項)", id="ctx-options")
         else:
             self._batch_paths = []
-            yield OptionList("複製檔名", "刪除", id="ctx-options")
+            yield OptionList("複製檔名", "新增檔案", "刪除", id="ctx-options")
 
     def on_mount(self) -> None:
         ol = self.query_one(OptionList)
@@ -208,6 +210,33 @@ class TreeContextMenu(ModalScreen):
             app.notify(f"已複製：{_relative_display(path)}", timeout=1.5)
             self.dismiss()
             app.run_worker(lambda: _copy_filename_bg(app, path), thread=True)
+        elif event.option_index == self._OPT_NEW_FILE:
+            path = self._path
+            app = self.app
+            self.dismiss()
+            start_dir = str(path.parent if path.is_file() else path)
+
+            async def _do_new_file() -> None:
+                async def _on_path(new_path) -> None:
+                    if not new_path:
+                        return
+                    try:
+                        Path(new_path).touch()
+                        app._open_file_tab(Path(new_path))
+                        try:
+                            ft = app.query_one(FileTree)
+                            ft.refresh_tree()
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        app.notify(f"新增失敗：{e}", severity="error")
+
+                app.push_screen(
+                    FileSave(start_dir, title="新增檔案"),
+                    callback=_on_path,
+                )
+
+            app.call_after_refresh(lambda: app.run_worker(_do_new_file()))
         elif event.option_index == self._OPT_DELETE:
             paths = self._batch_paths if self._batch_paths else [self._path]
             app = self.app

@@ -20,8 +20,10 @@ from .config import (
     MAX_TOOL_CALLS,
     NUM_CTX,
     USERNAME,
+    get_nickname,
 )
 from .models import ModelProfile, get_profile
+from .tool_log import log_tool_call, log_turn_start
 from .tools import (
     BASH_TOOL,
     FETCH_URLS_TOOL,
@@ -56,6 +58,7 @@ class Agent:
         self.last_prediction: str = ""
         self._cancelled = False
         self._tts_config: dict | None = None  # 由 _do_load_agent 注入；None 表示不啟用 TTS
+        self._nickname: str | None = None    # agent tab 的顯示暱稱；不寫 os.environ 以免污染 main agent
         # agent 專屬目錄（存 history.json / AGENT_NOTES.md；None 表示用 cwd）
         self._agent_dir: "Path | None" = agent_dir
         self._history_file: Path = history_file or HISTORY_FILE
@@ -82,6 +85,31 @@ class Agent:
         self._rebuild_system_prompt()
         self._load_history()
 
+    def _resolve_prompt(self, prompt: str, base_dir: Path) -> str:
+        """展開 prompt 中的模板變數與 {{include:file}} 指令。
+        {AGENT_DIR} → agent 目錄絕對路徑
+        {CWD}       → 目前工作目錄
+        {DATE}      → 今天日期 YYYY-MM-DD
+        {{include:filename}} → 載入 base_dir/filename 的文字內容
+        """
+        agent_dir_str = str(base_dir.resolve())
+        now = datetime.now().strftime("%Y-%m-%d")
+        result = prompt
+        result = result.replace("{AGENT_DIR}", agent_dir_str)
+        result = result.replace("{CWD}", os.getcwd())
+        result = result.replace("{DATE}", now)
+
+        def _do_include(m: re.Match) -> str:
+            fname = m.group(1).strip()
+            fpath = base_dir / fname
+            try:
+                return fpath.read_text(encoding="utf-8")
+            except Exception:
+                return f"[include not found: {fname}]"
+
+        result = re.sub(r"\{\{include:([^}]+)\}\}", _do_include, result)
+        return result
+
     def _rebuild_system_prompt(self):
         """重建 history[0] system message（日期、cwd、MCP context 每次都可能變）。
         若有 _custom_system_prompt（agent factory 建立的 agent），直接使用，不走通用邏輯。
@@ -90,7 +118,7 @@ class Agent:
             notes_root = self._agent_dir if self._agent_dir else Path(os.getcwd())
             notes_path = notes_root / "AGENT_NOTES.md"
             notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
-            content = self._custom_system_prompt
+            content = self._resolve_prompt(self._custom_system_prompt, notes_root)
             if notes:
                 content += f"\n\n## 📝 專案記憶\n{notes}\n\n以上規則必須嚴格遵守。"
             msg = {"role": "system", "content": content}
@@ -120,8 +148,7 @@ class Agent:
         else:
             mcp_server_desc = ""
 
-        from core.config import get_nickname
-        nickname = get_nickname(self.profile.name)
+        nickname = self.display_name
         nickname_line = (
             f"你的名字是「{nickname}」。" if nickname != self.profile.name else ""
         )
@@ -196,6 +223,11 @@ class Agent:
             self.history[0] = system_msg
         else:
             self.history.insert(0, system_msg)
+
+    @property
+    def display_name(self) -> str:
+        """顯示名稱：agent tab 用 _nickname，main agent 用 get_nickname（讀 env/.env）。"""
+        return self._nickname or get_nickname(self.profile.name)
 
     # 時間相關的關鍵字，匹配到即視為時間問答訊息
     _TIME_KEYWORDS = ("現在時間", "幾點", "幾点", "時間是", "時區", "UTC")
@@ -352,6 +384,8 @@ class Agent:
         self._last_cache_hit: int | None = None
         self._t_thinking_end: float | None = None
         tool_call_count = 0
+        _tool_call_log: list[str] = []  # 記錄本輪所有工具呼叫，hit 上限時寫入進度摘要
+        log_turn_start(len(self.history))
         while True:
             reply_parts: list[str] = []
             tool_calls: list = []
@@ -466,11 +500,14 @@ class Agent:
                     self.history.pop()
                 return
 
-            if on_tool_call:
-                for tc, (fn_name, result) in zip(tool_calls, results):
-                    raw = getattr(tc.function, "arguments", {})
-                    args = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            for tc, (fn_name, result) in zip(tool_calls, results):
+                raw = getattr(tc.function, "arguments", {})
+                args = json.loads(raw) if isinstance(raw, str) else dict(raw)
+                log_tool_call(fn_name, args, result)
+                if on_tool_call:
                     await on_tool_call(fn_name, args, result)
+            for _fn, _ in results:
+                _tool_call_log.append(_fn)
 
             # Tool result messages (format differs by backend)
             if self.profile.backend in ("gemini", "deepseek"):
@@ -491,11 +528,16 @@ class Agent:
             tool_call_count += 1
             if tool_call_count >= MAX_TOOL_CALLS:
                 logger.warning(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，強制結束")
-                if self.history and self.history[-1]["role"] == "user":
-                    self.history.pop()
+                # 保留 user message，寫入進度摘要讓下一輪對話能接續
+                tools_str = "、".join(_tool_call_log) if _tool_call_log else "（無）"
+                _progress = (
+                    f"⚠️ 已達工具呼叫上限（{MAX_TOOL_CALLS} 次），本輪自動中止。\n"
+                    f"本輪依序呼叫的工具：{tools_str}\n"
+                    "下次對話說「繼續」即可接續未完成的任務。"
+                )
+                self.history.append({"role": "assistant", "content": _progress})
+                self._rotate_history()
                 self.save_history()
                 if on_tool_call:
-                    # TUI mode: raise so _send() can show error widget
                     raise RuntimeError(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，對話強制結束")
-                logger.warning(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，強制結束")
                 return

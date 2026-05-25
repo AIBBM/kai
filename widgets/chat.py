@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 from core.config import USERNAME
@@ -16,6 +17,7 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, Markdown, Static, Tab, TextArea
 
+from textual_fspicker import FileSave
 from .utils import _copy_to_clipboard, _latex_to_unicode, _line_height, _open_image
 
 
@@ -92,7 +94,7 @@ class ImageBubble(Widget):
 class FileViewer(TextArea):
     """檔案檢視與編輯器：Ctrl+S 存檔、Ctrl+C 多行複製（WSL）、修改時 tab 標題加 ●。"""
 
-    BINDINGS = [Binding("ctrl+s", "save", "儲存")]
+    BINDINGS = [Binding("ctrl+s", "save", "儲存"), Binding("f2", "save_as", "另存新檔")]
 
     def __init__(self, *args, file_path: Path | None = None, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -154,6 +156,28 @@ class FileViewer(TextArea):
             self.app.notify(f"已儲存 {self._file_path.name}", timeout=1.5)
         except Exception as e:
             self.app.notify(f"儲存失敗：{e}", severity="error")
+
+    async def action_save_as(self) -> None:
+        start_dir = str(self._file_path.parent) if self._file_path else os.getcwd()
+
+        async def _on_path(path) -> None:
+            if not path:
+                return
+            dest = Path(path)
+            try:
+                dest.write_text(self.text, encoding="utf-8")
+                self._file_path = dest
+                self._mtime = dest.stat().st_mtime
+                self._modified = False
+                self._set_tab_title(modified=False)
+                self.app.notify(f"已另存為 {dest.name}", timeout=1.5)
+            except Exception as e:
+                self.app.notify(f"另存失敗：{e}", severity="error")
+
+        self.app.push_screen(
+            FileSave(start_dir, title="另存新檔"),
+            callback=_on_path,
+        )
 
     def action_copy(self) -> None:
         text = self.selected_text

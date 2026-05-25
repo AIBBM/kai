@@ -7,7 +7,10 @@ way the former Agent methods did.
 from __future__ import annotations
 
 import asyncio
+import base64
+import mimetypes
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -21,6 +24,26 @@ from .tools import clean_thinking
 
 if TYPE_CHECKING:
     from .agent import Agent
+
+
+def _to_openai_messages(messages: list[dict]) -> list[dict]:
+    """將 Ollama 格式的 images key 轉換為 OpenAI vision 的 content list 格式。"""
+    result = []
+    for msg in messages:
+        if "images" not in msg:
+            result.append(msg)
+            continue
+        content: list = [{"type": "text", "text": msg.get("content", "")}]
+        for img_path in msg["images"]:
+            p = Path(img_path)
+            mime = mimetypes.guess_type(img_path)[0] or "image/png"
+            b64 = base64.b64encode(p.read_bytes()).decode()
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{b64}"},
+            })
+        result.append({"role": msg["role"], "content": content})
+    return result
 
 
 async def stream_ollama(
@@ -106,6 +129,7 @@ async def stream_openai_compat(
 ) -> None:
     """OpenAI-compatible 串流（Gemini / DeepSeek）。"""
     from openai import NOT_GIVEN, RateLimitError
+    messages = _to_openai_messages(messages)
     is_deepseek = agent.profile.backend == "deepseek"
     extra: dict = {}
     if is_deepseek and agent.profile.supports_thinking:

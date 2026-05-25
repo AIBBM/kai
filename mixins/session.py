@@ -105,9 +105,9 @@ class SessionMixin(_MixinBase):
     # ── session 命名 ──────────────────────────────────────────────────────────
 
     def _update_subtitle(self) -> None:
-        nickname = get_nickname(self.agent.profile.name)
+        display = self.agent.display_name
         name = getattr(self, "_session_name", "")
-        self.sub_title = f"{nickname} · {name}" if name else nickname
+        self.sub_title = f"{display} · {name}" if name else display
 
     def _current_tab_id(self) -> str:
         from textual.widgets import TabbedContent
@@ -172,12 +172,15 @@ class SessionMixin(_MixinBase):
     # ── /cls ─────────────────────────────────────────────────────────────────
 
     async def action_clear(self) -> None:
-        real_msgs = [m for m in self.agent.history if m.get("role") != "system"]
+        # 快照：await 期間 self.agent 可能因 tab 事件被替換，固定操作當下的 agent/msgs
+        agent = self.agent
+        msgs = self._active_msgs()
+        real_msgs = [m for m in agent.history if m.get("role") != "system"]
         if not real_msgs:
             self.notify("沒有對話記錄，無需清除", severity="information", timeout=2)
             return
-        await self._active_msgs().remove_children()
-        hist_file = self.agent._history_file.resolve()
+        await msgs.remove_children()
+        hist_file = agent._history_file.resolve()
         hist_dir = hist_file.parent / ".history"
         if hist_file.exists() and self._resumed_from is None:
             hist_dir.mkdir(exist_ok=True)
@@ -201,9 +204,11 @@ class SessionMixin(_MixinBase):
             self.notify("已清除（resume 後未新增對話，不重複歸檔）", timeout=3)
         self._resumed_from = None
         self._tab_resumed_from.pop(self._current_tab_id(), None)
-        self.agent.history = []
-        self.agent._rebuild_system_prompt()
-        self.agent.save_history()
+        agent.history = []
+        agent._rebuild_system_prompt()
+        agent.save_history()
+        # await 期間 TabActivated 可能把 self.agent 換成 main agent，顯式還原
+        self.agent = agent
         self._update_subtitle()
         self.query_one("#file-tree", FileTree).refresh_tree()
 

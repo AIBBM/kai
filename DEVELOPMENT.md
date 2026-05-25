@@ -223,7 +223,7 @@ widgets/
   tree.py       FileTree（懶載入目錄樹，雙擊開啟）
                 RightClickTree（攔截右鍵事件）
                 TreeContextMenu（右鍵選單 ModalScreen）
-  sidebar.py    Sidebar（cwd、模型、上下文檔案、git、MCP 工具）
+  sidebar.py    Sidebar（cwd、模型、git、MCP 工具）
                 ResizeHandle（拖拉分隔條）
   chat.py       AIMessage（Markdown 渲染 + 右鍵選取模式）
                 FileViewer（唯讀 TextArea，Ctrl+C WSL 多行複製）
