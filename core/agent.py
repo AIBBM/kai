@@ -358,6 +358,7 @@ class Agent:
         self._last_cache_hit: int | None = None
         self._t_thinking_end: float | None = None
         tool_call_count = 0
+        _tool_call_log: list[str] = []  # 記錄本輪所有工具呼叫，hit 上限時寫入進度摘要
         while True:
             reply_parts: list[str] = []
             tool_calls: list = []
@@ -477,6 +478,8 @@ class Agent:
                     raw = getattr(tc.function, "arguments", {})
                     args = json.loads(raw) if isinstance(raw, str) else dict(raw)
                     await on_tool_call(fn_name, args, result)
+            for _fn, _ in results:
+                _tool_call_log.append(_fn)
 
             # Tool result messages (format differs by backend)
             if self.profile.backend in ("gemini", "deepseek"):
@@ -497,11 +500,16 @@ class Agent:
             tool_call_count += 1
             if tool_call_count >= MAX_TOOL_CALLS:
                 logger.warning(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，強制結束")
-                if self.history and self.history[-1]["role"] == "user":
-                    self.history.pop()
+                # 保留 user message，寫入進度摘要讓下一輪對話能接續
+                tools_str = "、".join(_tool_call_log) if _tool_call_log else "（無）"
+                _progress = (
+                    f"⚠️ 已達工具呼叫上限（{MAX_TOOL_CALLS} 次），本輪自動中止。\n"
+                    f"本輪依序呼叫的工具：{tools_str}\n"
+                    "下次對話說「繼續」即可接續未完成的任務。"
+                )
+                self.history.append({"role": "assistant", "content": _progress})
+                self._rotate_history()
                 self.save_history()
                 if on_tool_call:
-                    # TUI mode: raise so _send() can show error widget
                     raise RuntimeError(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，對話強制結束")
-                logger.warning(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，強制結束")
                 return
