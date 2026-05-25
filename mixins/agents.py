@@ -77,9 +77,10 @@ class AgentsMixin(_MixinBase):
             prompt.focus()
 
     async def _do_load_agent(self, name: str) -> None:
-        from core.agent_factory import load_agent
+        from core.agent_factory import find_agent, load_agent
+        resolved = find_agent(name) or name  # 支援 name / nickname / dir 模糊比對
         try:
-            data, adir = load_agent(name)
+            data, adir = load_agent(resolved)
         except FileNotFoundError as e:
             self.notify(str(e), severity="error")
             return
