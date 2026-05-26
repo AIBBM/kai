@@ -56,7 +56,7 @@ class Agent:
         self._cancelled = False
         self._tts_config: dict | None = None  # 由 _do_load_agent 注入；None 表示不啟用 TTS
         self._nickname: str | None = None    # agent tab 的顯示暱稱；不寫 os.environ 以免污染 main agent
-        # agent 專屬目錄（存 history.json / AGENT_NOTES.md；None 表示用 cwd）
+        # agent 專屬目錄（存 history.json / notes.md；None 表示用 cwd/.kai）
         self._agent_dir: "Path | None" = agent_dir
         self._history_file: Path = history_file or HISTORY_FILE
         # 固定 system prompt（agent factory 建立的 agent 用此代替通用重建邏輯）
