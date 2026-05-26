@@ -24,8 +24,8 @@ SEARCH_RETRIES = int(os.getenv("SEARCH_RETRIES", "2"))  # 搜尋重試次數
 HISTORY_KEEP = int(os.getenv("HISTORY_KEEP", "10"))  # 對話歷史保留則數
 HISTORY_FILE = Path(os.getenv("HISTORY_FILE", str(KAI_DIR / "history.json")))  # 歷史儲存路徑
 USERNAME = os.getenv("USERNAME", "你")  # 提示符顯示名稱
-# mcp_servers.json 隨 kai package 走，不落在專案 cwd
-MCP_SERVERS_FILE = Path(os.getenv("MCP_SERVERS_FILE", str(_KAI_PKG_DIR / "mcp_servers.json")))
+# bundled mcp_servers.json（隨 package 走），僅供首次啟動複製到 ~/.kai/ 用
+BUNDLED_MCP_FILE = _KAI_PKG_DIR / "mcp_servers.json"
 BASH_TIMEOUT = int(os.getenv("BASH_TIMEOUT", "30"))  # bash_exec 預設超時秒數
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.6"))  # 生成溫度（0=確定性，1=創意）
 TOP_K = int(os.getenv("TOP_K", "20"))                 # top-k 採樣（0=停用）

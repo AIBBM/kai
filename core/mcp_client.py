@@ -11,7 +11,12 @@ import httpx
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-from .config import MCP_SERVERS_FILE, MCP_TOOL_TIMEOUT
+from pathlib import Path
+
+from .config import BUNDLED_MCP_FILE, MCP_TOOL_TIMEOUT
+
+GLOBAL_MCP_FILE = Path.home() / ".kai" / "mcp_servers.json"
+LOCAL_MCP_FILE  = Path(".kai") / "mcp_servers.json"   # cwd-relative，每次呼叫時才 resolve
 
 
 class MCPClient:
@@ -165,13 +170,32 @@ class MCPClient:
         return output
 
 
-def load_mcp_servers() -> dict:
-    """載入 mcp_servers.json，檔案不存在時回傳空 dict。"""
-    if not MCP_SERVERS_FILE.exists():
+def _ensure_global_mcp() -> None:
+    """首次啟動：若 ~/.kai/mcp_servers.json 不存在，從 package 內建檔複製。"""
+    if GLOBAL_MCP_FILE.exists():
+        return
+    GLOBAL_MCP_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if BUNDLED_MCP_FILE.exists():
+        import shutil
+        shutil.copy(BUNDLED_MCP_FILE, GLOBAL_MCP_FILE)
+        logger.info(f"初始化全域 MCP 設定：{GLOBAL_MCP_FILE}")
+
+
+def _read_mcp_file(path: Path) -> dict:
+    if not path.exists():
         return {}
     try:
-        data = json.loads(MCP_SERVERS_FILE.read_text(encoding="utf-8"))
-        return data.get("mcpServers", {})
+        return json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {})
     except Exception as e:
-        logger.warning(f"載入 MCP server 設定失敗：{e}")
+        logger.warning(f"載入 MCP 設定失敗 {path}：{e}")
         return {}
+
+
+def load_mcp_servers() -> dict:
+    """讀取 ~/.kai/mcp_servers.json（全域）+ cwd/.kai/mcp_servers.json（專案），shallow merge。
+    同名 server 以專案設定優先；_prefix 停用邏輯保持不變。
+    """
+    _ensure_global_mcp()
+    global_srv = _read_mcp_file(GLOBAL_MCP_FILE)
+    local_srv  = _read_mcp_file(Path(".kai") / "mcp_servers.json")
+    return {**global_srv, **local_srv}

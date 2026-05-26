@@ -34,7 +34,7 @@ class MCPMixin(_MixinBase):
         self.notify("✅ MCP 重新載入完成", severity="information")
 
     async def _do_mcp_add(self, arg: str) -> None:
-        from core.config import MCP_SERVERS_FILE
+        from core.mcp_client import GLOBAL_MCP_FILE
         if not arg:
             self.notify("用法：/mcp-add <name> <command> [args...]  或  /mcp-add <name> --url <url>", severity="warning")
             return
@@ -44,9 +44,9 @@ class MCPMixin(_MixinBase):
             return
         name, *rest = parts
         data: dict = {}
-        if MCP_SERVERS_FILE.exists():
+        if GLOBAL_MCP_FILE.exists():
             try:
-                data = json.loads(MCP_SERVERS_FILE.read_text(encoding="utf-8"))
+                data = json.loads(GLOBAL_MCP_FILE.read_text(encoding="utf-8"))
             except Exception:
                 pass
         if rest[0] == "--url":
@@ -58,27 +58,28 @@ class MCPMixin(_MixinBase):
             command, *extra_args = rest
             entry = {"command": command, "args": extra_args}
         data.setdefault("mcpServers", {})[name] = entry
-        MCP_SERVERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.notify(f"✅ 已新增 {name}，執行 /mcp-reload 生效", severity="information")
+        GLOBAL_MCP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        GLOBAL_MCP_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.notify(f"✅ 已新增 {name} 到 ~/.kai/mcp_servers.json，執行 /mcp-reload 生效", severity="information")
 
     async def _do_mcp_del(self, arg: str) -> None:
-        from core.config import MCP_SERVERS_FILE
+        from core.mcp_client import GLOBAL_MCP_FILE
         if not arg:
             self.notify("用法：/mcp-del <name>", severity="warning")
             return
         name = arg.strip()
-        if not MCP_SERVERS_FILE.exists():
-            self.notify("mcp_servers.json 不存在", severity="error")
+        if not GLOBAL_MCP_FILE.exists():
+            self.notify("~/.kai/mcp_servers.json 不存在", severity="error")
             return
         try:
-            data = json.loads(MCP_SERVERS_FILE.read_text(encoding="utf-8"))
+            data = json.loads(GLOBAL_MCP_FILE.read_text(encoding="utf-8"))
         except Exception as e:
             self.notify(f"讀取失敗：{e}", severity="error")
             return
         servers = data.get("mcpServers", {})
         if name not in servers:
-            self.notify(f"找不到 server：{name}", severity="error")
+            self.notify(f"找不到 server：{name}（只能刪除 ~/.kai/mcp_servers.json 內的 server）", severity="error")
             return
         del servers[name]
-        MCP_SERVERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.notify(f"✅ 已移除 {name}，執行 /mcp-reload 生效", severity="information")
+        GLOBAL_MCP_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.notify(f"✅ 已從 ~/.kai/mcp_servers.json 移除 {name}，執行 /mcp-reload 生效", severity="information")
