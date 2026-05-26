@@ -55,6 +55,25 @@ class SessionMixin(_MixinBase):
         self.sub_title = arg
         self.notify(f"✅ {model} 暱稱設為「{arg}」", timeout=3)
 
+    def _apply_project_config(self) -> None:
+        """重新讀取 .kai/config.json 並套用所有設定到 agent 和 UI。"""
+        cfg = load_kai_config()
+        apply_kai_config(cfg)
+        if "history_keep" in cfg:
+            self.agent.history_keep = int(cfg["history_keep"])
+        if "num_ctx" in cfg:
+            self.agent.profile.num_ctx = int(cfg["num_ctx"])
+        if hasattr(self, "_debug_tools") and "debug_tools" in cfg:
+            v = cfg["debug_tools"]
+            self._debug_tools = bool(v) if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes")
+        if "model" in cfg and cfg["model"] != self.agent.profile.name:
+            self.call_later(self.action_switch_model, cfg["model"])
+
+    async def action_reload_config(self) -> None:
+        """重新載入 .kai/config.json 並套用所有設定。"""
+        self._apply_project_config()
+        self.notify("✅ .kai/config.json 已重新載入", severity="information", timeout=3)
+
     async def _do_cd(self, arg: str) -> None:
         target = Path(self._prev_cwd if arg == "-" else arg).expanduser().resolve()
         if not target.is_dir():
@@ -64,12 +83,7 @@ class SessionMixin(_MixinBase):
         self._prev_cwd = os.getcwd()
         os.chdir(target)
         ensure_kai_dir()
-        cfg = load_kai_config()
-        apply_kai_config(cfg)
-        if "history_keep" in cfg:
-            self.agent.history_keep = int(cfg["history_keep"])
-        if "model" in cfg and cfg["model"] != self.agent.profile.name:
-            self.call_later(self.action_switch_model, cfg["model"])
+        self._apply_project_config()
         # reset session state for new directory
         self._resumed_from = None
         self._tab_resumed_from["chat"] = None
