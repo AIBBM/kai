@@ -12,6 +12,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual import events
 from textual.events import Click
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -84,9 +85,9 @@ class ImageBubble(Widget):
             classes="image-bubble-header",
         )
         yield Static(self._question, markup=False, classes="image-question")
-        yield Button("🔍 開啟圖片", classes="img-open-btn", variant="default")
+        yield Static("🔍 開啟圖片", classes="img-open-btn")
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_click(self, event: events.Click) -> None:
         event.stop()
         await asyncio.to_thread(_open_image, self._path)
 
@@ -206,14 +207,15 @@ class FileViewer(TextArea):
         self.app.call_from_thread(self.app.notify, msg, severity=sev, timeout=1.5)
 
 
-class CopyButton(Button):
+class CopyButton(Static):
     """程式碼區塊右上角的複製按鈕。"""
 
     def __init__(self, code: str) -> None:
         super().__init__("⎘", classes="copy-btn")
         self._code = code
 
-    async def on_button_pressed(self) -> None:
+    async def on_click(self, event: events.Click) -> None:
+        event.stop()
         ok = _copy_to_clipboard(self._code, app=self.app)
         if ok:
             self.app.notify("已複製", timeout=1.5)
@@ -221,14 +223,15 @@ class CopyButton(Button):
             self.app.notify("複製失敗（需要 xclip 或 clip.exe）", severity="warning")
 
 
-class CapabilityBadge(Button):
+class CapabilityBadge(Static):
     """可點擊功能標籤（目前只有 think）。"""
 
     def __init__(self, key: str, label: str) -> None:
         super().__init__(label, id=f"cap-{key}", classes="cap-badge")
         self._key = key
 
-    def on_button_pressed(self) -> None:
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
         if self._key == "think":
             self.app.action_toggle_think()  # type: ignore[attr-defined]
 

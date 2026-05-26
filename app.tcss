@@ -1,8 +1,3 @@
-/* ─── 主佈局 ─── */
-Screen {
-    layout: vertical;
-}
-
 * {
     scrollbar-size: 1 1;
     scrollbar-background: transparent;
@@ -30,7 +25,6 @@ Screen {
     border: none;
 }
 
-
 #messages {
     width: 1fr;
     padding: 0 2 1 2;
@@ -46,7 +40,7 @@ Screen {
 
 #file-tree Tree {
     background: transparent;
-    padding: 0 0 0 1;
+    padding-left: 1;
 }
 
 /* ─── 拖拉分隔條 ─── */
@@ -75,13 +69,11 @@ ResizeHandle.dragging {
     color: $accent;
     text-style: bold;
     margin: 1 0 0 0;
-    padding: 0;
 }
 
 .sidebar-content {
     color: $text-muted;
-    padding: 0 0 0 1;
-    margin: 0;
+    padding-left: 1;
 }
 
 /* ─── 訊息 ─── */
@@ -105,25 +97,21 @@ ResizeHandle.dragging {
     height: auto;
     border-left: thick $primary;
     background: $primary-background;
-    padding: 0 1 0 1;
+    padding: 0 1;
     margin: 1 0 0 0;
 }
 
 .image-bubble-header {
-    margin: 0;
-    padding: 0;
+    color: $text;
 }
 
 .image-question {
     color: $text-muted;
-    margin: 0;
-    padding: 0;
 }
 
 .img-open-btn {
     height: 1;
     min-width: 10;
-    margin: 0 0 0 0;
     border: none;
     background: $surface;
     color: $text-muted;
@@ -166,31 +154,26 @@ AIMessage {
     height: auto;
     border-left: thick $surface;
     background: $boost;
-    margin: 0 0 0 0;
 }
 
 AIMessage .stream-view {
     height: auto;
     max-width: 100%;
-    padding: 0 1 0 1;
-    margin: 0;
+    padding: 0 1;
     background: transparent;
-    overflow-x: auto;
 }
 
 AIMessage .md-view {
     display: none;
     height: auto;
-    padding: 0 1 0 1;
-    margin: 0;
+    padding: 0 1;
     border: none;
     background: transparent;
 }
 
-AIMessage:focus, AIMessage .md-view:focus {
+AIMessage .md-view:focus {
     border: none;
 }
-
 
 AIMessage .ta-view {
     display: none;
@@ -222,7 +205,6 @@ AIMessage.select-mode .ta-view {
 /* ─── 工具除錯卡片 ─── */
 .tool-debug {
     border-left: thick $warning;
-    margin: 0 0 0 0;
     background: $boost;
 }
 
@@ -259,7 +241,7 @@ AutoComplete .autocomplete--highlight-match {
 #prompt {
     width: 1fr;
     border: round $primary;
-    margin: 0 1 0 1;
+    margin: 0 1;
     background: $boost;
     scrollbar-size-horizontal: 0;
 }
@@ -318,8 +300,6 @@ AutoComplete .autocomplete--highlight-match {
 
 .cap-badge.cap-label {
     width: auto;
-    background: $primary-background;
-    color: $primary;
 }
 
 /* ─── 程式碼複製按鈕 ─── */
@@ -383,7 +363,7 @@ MarkdownTableContent {
     max-width: 100%;
 }
 
-/* ─── 附件按鈕（Static，不是 Button，無 border 問題）─── */
+/* ─── 附件按鈕（Static，無 Button border 問題）─── */
 .attach-btn {
     width: 3;
     height: 3;
