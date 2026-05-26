@@ -72,6 +72,31 @@ def load_kai_config() -> dict:
     return {**global_cfg, **local_cfg}
 
 
+def current_kai_config() -> dict:
+    """回傳目前所有生效的 config 值（可寫入 config.json 的 key）。"""
+    g = globals()
+    return {
+        "model":                  g["MODEL"],
+        "history_keep":           g["HISTORY_KEEP"],
+        "debug_tools":            g["DEBUG_TOOLS"],
+        "temperature":            g["TEMPERATURE"],
+        "num_ctx":                g["NUM_CTX"],
+        "top_k":                  g["TOP_K"],
+        "top_p":                  g["TOP_P"],
+        "max_tool_calls":         g["MAX_TOOL_CALLS"],
+        "bash_timeout":           g["BASH_TIMEOUT"],
+        "username":               g["USERNAME"],
+        "searxng_url":            g["SEARXNG_URL"],
+        "fetch_max_chars":        g["FETCH_MAX_CHARS"],
+        "max_search_chars":       g["MAX_SEARCH_CHARS"],
+        "search_num_results":     g["SEARCH_NUM_RESULTS"],
+        "search_timeout":         g["SEARCH_TIMEOUT"],
+        "search_retries":         g["SEARCH_RETRIES"],
+        "ollama_stream_timeout":  g["OLLAMA_STREAM_TIMEOUT"],
+        "mcp_tool_timeout":       g["MCP_TOOL_TIMEOUT"],
+    }
+
+
 def apply_kai_config(cfg: dict) -> None:
     """將 config dict 套用到 module globals。API key 類不支援（留在 .env）。"""
     g = globals()

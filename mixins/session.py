@@ -13,7 +13,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import Static, TabbedContent
 
 from core.agent import Agent
-from core.config import _normalize, apply_kai_config, ensure_kai_dir, get_nickname, load_kai_config
+from core.config import _normalize, apply_kai_config, current_kai_config, ensure_kai_dir, get_nickname, load_kai_config
 from core.models import REGISTRY
 from widgets.input import HistoryInput
 from widgets.sidebar import Sidebar
@@ -68,6 +68,40 @@ class SessionMixin(_MixinBase):
             self._debug_tools = bool(v) if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes")
         if "model" in cfg and cfg["model"] != self.agent.profile.name:
             self.call_later(self.action_switch_model, cfg["model"])
+
+    async def action_init_config(self, arg: str) -> None:
+        """顯示目前生效的 config，或寫入 local / global config.json。"""
+        cfg = current_kai_config()
+        text = json.dumps(cfg, ensure_ascii=False, indent=2)
+
+        if not arg:
+            # 無參數：顯示目前值
+            from widgets.chat import AIMessage
+            msgs = self._active_msgs()
+            msg = AIMessage()
+            await msgs.mount(msg)
+            msg.update_content(f"```json\n{text}\n```", final=True)
+            msgs.scroll_end(animate=False)
+            return
+
+        if arg == "local":
+            path = Path(".kai") / "config.json"
+            label = "cwd/.kai/config.json"
+        elif arg == "global":
+            path = Path.home() / ".kai" / "config.json"
+            label = "~/.kai/config.json"
+        else:
+            self.notify("用法：/init-config [local|global]", severity="warning")
+            return
+
+        if path.exists():
+            self.notify(f"{label} 已存在，略過（先手動刪除再執行）", severity="warning", timeout=5)
+            return
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        self.notify(f"✅ 已寫入 {label}", severity="information", timeout=4)
+        self.query_one("#file-tree", FileTree).refresh_tree()
 
     async def action_reload_config(self) -> None:
         """重新載入 .kai/config.json 並套用所有設定。"""
