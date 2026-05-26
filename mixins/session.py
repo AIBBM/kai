@@ -70,38 +70,10 @@ class SessionMixin(_MixinBase):
             self.call_later(self.action_switch_model, cfg["model"])
 
     async def action_init_config(self, arg: str) -> None:
-        """顯示目前生效的 config，或寫入 local / global config.json。"""
+        """開啟互動式 config 面板（選取 key 後按 L/G 匯出）。"""
+        from widgets.config_screen import ConfigScreen
         cfg = current_kai_config()
-        text = json.dumps(cfg, ensure_ascii=False, indent=2)
-
-        if not arg:
-            # 無參數：顯示目前值
-            from widgets.chat import AIMessage
-            msgs = self._active_msgs()
-            msg = AIMessage()
-            await msgs.mount(msg)
-            await msg.update_content(f"```json\n{text}\n```", final=True)
-            msgs.scroll_end(animate=False)
-            return
-
-        if arg == "local":
-            path = Path(".kai") / "config.json"
-            label = "cwd/.kai/config.json"
-        elif arg == "global":
-            path = Path.home() / ".kai" / "config.json"
-            label = "~/.kai/config.json"
-        else:
-            self.notify("用法：/init-config [local|global]", severity="warning")
-            return
-
-        if path.exists():
-            self.notify(f"{label} 已存在，略過（先手動刪除再執行）", severity="warning", timeout=5)
-            return
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-        self.notify(f"✅ 已寫入 {label}", severity="information", timeout=4)
-        self.query_one("#file-tree", FileTree).refresh_tree()
+        await self.push_screen(ConfigScreen(cfg))
 
     async def action_reload_config(self) -> None:
         """重新載入 .kai/config.json 並套用所有設定。"""

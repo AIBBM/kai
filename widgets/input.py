@@ -299,6 +299,10 @@ class ChatAutoComplete(AutoComplete):
             new_val = "/image " + value
             target.value = new_val
             target.cursor_position = len(new_val)
+        elif text.startswith("/cd "):
+            new_val = "/cd " + value
+            target.value = new_val
+            target.cursor_position = len(new_val)
         elif text.startswith("/"):
             target.value = value
             target.cursor_position = len(value)
