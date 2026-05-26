@@ -80,7 +80,7 @@ class SessionMixin(_MixinBase):
             msgs = self._active_msgs()
             msg = AIMessage()
             await msgs.mount(msg)
-            msg.update_content(f"```json\n{text}\n```", final=True)
+            await msg.update_content(f"```json\n{text}\n```", final=True)
             msgs.scroll_end(animate=False)
             return
 
