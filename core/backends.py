@@ -19,7 +19,7 @@ import ollama
 from loguru import logger
 from openai import AsyncOpenAI
 
-from .config import OLLAMA_STREAM_TIMEOUT, TEMPERATURE, TOP_K, TOP_P
+from . import config as _cfg
 from .tools import clean_thinking
 
 if TYPE_CHECKING:
@@ -68,7 +68,7 @@ async def stream_ollama(
                 think=agent.profile.supports_thinking,
                 tools=active_tools,
                 stream=True,
-                options={"num_ctx": agent.profile.num_ctx, "temperature": TEMPERATURE, "top_k": TOP_K, "top_p": TOP_P},
+                options={"num_ctx": agent.profile.num_ctx, "temperature": _cfg.TEMPERATURE, "top_k": _cfg.TOP_K, "top_p": _cfg.TOP_P},
             )
         except httpx.ConnectError:
             raise
@@ -77,11 +77,11 @@ async def stream_ollama(
             _it = stream.__aiter__()
             while True:
                 try:
-                    chunk = await asyncio.wait_for(_it.__anext__(), timeout=OLLAMA_STREAM_TIMEOUT)
+                    chunk = await asyncio.wait_for(_it.__anext__(), timeout=_cfg.OLLAMA_STREAM_TIMEOUT)
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError:
-                    raise asyncio.TimeoutError(f"Ollama 超過 {OLLAMA_STREAM_TIMEOUT}s 未回應，可能已卡住")
+                    raise asyncio.TimeoutError(f"Ollama 超過 {_cfg.OLLAMA_STREAM_TIMEOUT}s 未回應，可能已卡住")
                 if agent._cancelled:
                     break
                 msg = chunk.message
@@ -142,8 +142,8 @@ async def stream_openai_compat(
             model=agent.profile.name,
             messages=messages,
             tools=active_tools or NOT_GIVEN,
-            temperature=TEMPERATURE,
-            top_p=TOP_P,
+            temperature=_cfg.TEMPERATURE,
+            top_p=_cfg.TOP_P,
             stream=True,
             stream_options={"include_usage": True},
             **extra,

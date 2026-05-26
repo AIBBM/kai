@@ -11,15 +11,12 @@ from loguru import logger
 from openai import AsyncOpenAI
 
 from .backends import stream_ollama, stream_openai_compat
+from . import config as _cfg
 from .config import (
     DEEPSEEK_API_KEY,
     GEMINI_API_KEY,
     HISTORY_FILE,
     HISTORY_KEEP,
-    MAX_SEARCH_CHARS,
-    MAX_TOOL_CALLS,
-    NUM_CTX,
-    USERNAME,
     get_nickname,
 )
 from .models import ModelProfile, get_profile
@@ -51,8 +48,8 @@ class Agent:
             "fetch_urls": fetch_urls,
             "bash_exec": bash_exec,
         }
-        if NUM_CTX:
-            self.profile.num_ctx = NUM_CTX
+        if _cfg.NUM_CTX:
+            self.profile.num_ctx = _cfg.NUM_CTX
         self.mcp_client: "MCPClient | None" = None
         self.mcp_context: str = ""
         self.last_prediction: str = ""
@@ -157,7 +154,7 @@ class Agent:
             "role": "system",
             "content": (
                 f"目前時間是 {now}（台灣時區 UTC+8）。"
-                f"使用者的名字是 {USERNAME}。"
+                f"使用者的名字是 {_cfg.USERNAME}。"
                 + nickname_line
                 + "若對話歷史有舊的時間記錄一律作廢。"
                 + (
@@ -352,9 +349,9 @@ class Agent:
         if re.search(r"<html|<!doctype", content[:200], re.IGNORECASE):
             content = re.sub(r"<[^>]+>", " ", content)
             content = re.sub(r"\s+", " ", content).strip()
-        if len(content) > MAX_SEARCH_CHARS:
+        if len(content) > _cfg.MAX_SEARCH_CHARS:
             content = (
-                content[:MAX_SEARCH_CHARS] + f"\n...[已截斷，共 {len(content)} 字元]"
+                content[:_cfg.MAX_SEARCH_CHARS] + f"\n...[已截斷，共 {len(content)} 字元]"
             )
         return content
 
@@ -527,12 +524,11 @@ class Agent:
                     })
 
             tool_call_count += 1
-            if tool_call_count >= MAX_TOOL_CALLS:
-                logger.warning(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，強制結束")
-                # 保留 user message，寫入進度摘要讓下一輪對話能接續
+            if tool_call_count >= _cfg.MAX_TOOL_CALLS:
+                logger.warning(f"已達工具呼叫上限 {_cfg.MAX_TOOL_CALLS} 次，強制結束")
                 tools_str = "、".join(_tool_call_log) if _tool_call_log else "（無）"
                 _progress = (
-                    f"⚠️ 已達工具呼叫上限（{MAX_TOOL_CALLS} 次），本輪自動中止。\n"
+                    f"⚠️ 已達工具呼叫上限（{_cfg.MAX_TOOL_CALLS} 次），本輪自動中止。\n"
                     f"本輪依序呼叫的工具：{tools_str}\n"
                     "下次對話說「繼續」即可接續未完成的任務。"
                 )
@@ -540,5 +536,5 @@ class Agent:
                 self._rotate_history()
                 self.save_history()
                 if on_tool_call:
-                    raise RuntimeError(f"已達工具呼叫上限 {MAX_TOOL_CALLS} 次，對話強制結束")
+                    raise RuntimeError(f"已達工具呼叫上限 {_cfg.MAX_TOOL_CALLS} 次，對話強制結束")
                 return

@@ -73,17 +73,30 @@ def load_kai_config() -> dict:
 
 
 def apply_kai_config(cfg: dict) -> None:
-    """將 config dict 套用到 module globals。
-    支援：model、history_keep、debug_tools。
-    """
+    """將 config dict 套用到 module globals。API key 類不支援（留在 .env）。"""
     g = globals()
-    if "model" in cfg:
-        g["MODEL"] = str(cfg["model"])
-    if "history_keep" in cfg:
-        g["HISTORY_KEEP"] = int(cfg["history_keep"])
-    if "debug_tools" in cfg:
-        v = cfg["debug_tools"]
-        g["DEBUG_TOOLS"] = bool(v) if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes")
+    _STR   = {"model": "MODEL", "searxng_url": "SEARXNG_URL", "username": "USERNAME"}
+    _INT   = {"history_keep": "HISTORY_KEEP", "num_ctx": "NUM_CTX",
+              "max_tool_calls": "MAX_TOOL_CALLS", "max_search_chars": "MAX_SEARCH_CHARS",
+              "search_num_results": "SEARCH_NUM_RESULTS", "search_retries": "SEARCH_RETRIES",
+              "bash_timeout": "BASH_TIMEOUT", "fetch_max_chars": "FETCH_MAX_CHARS",
+              "ollama_stream_timeout": "OLLAMA_STREAM_TIMEOUT"}
+    _FLOAT = {"temperature": "TEMPERATURE", "top_k": "TOP_K", "top_p": "TOP_P",
+              "search_timeout": "SEARCH_TIMEOUT", "mcp_tool_timeout": "MCP_TOOL_TIMEOUT"}
+    _BOOL  = {"debug_tools": "DEBUG_TOOLS"}
+    for key, attr in _STR.items():
+        if key in cfg:
+            g[attr] = str(cfg[key])
+    for key, attr in _INT.items():
+        if key in cfg:
+            g[attr] = int(cfg[key])
+    for key, attr in _FLOAT.items():
+        if key in cfg:
+            g[attr] = float(cfg[key])
+    for key, attr in _BOOL.items():
+        if key in cfg:
+            v = cfg[key]
+            g[attr] = bool(v) if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes")
 
 # 只輸出 DEBUG 以上的 log 到 stderr，不干擾 stdout 的對話輸出
 logger.remove()
