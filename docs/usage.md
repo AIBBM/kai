@@ -47,7 +47,7 @@
 /cd /home/user/my-repo
 ```
 
-切換工作目錄，同時儲存目前目錄的歷史、切換後載入新目錄的 `history.json`，並重新整理檔案樹與 Sidebar。等同於 `!cd` 但更語意清晰。
+切換工作目錄，同時儲存目前目錄的歷史、切換後載入新目錄的 `.kai/history.json`，並重新整理檔案樹與 Sidebar。等同於 `!cd` 但更語意清晰。切換後也會自動套用新目錄的 `.kai/config.json`。
 
 ---
 
@@ -108,7 +108,7 @@
 /remember 這個專案的 DB 連線要用 port 5433
 ```
 
-將筆記附加寫入目前目錄的 `AGENT_NOTES.md`，跨 session 保留。適合記錄專案特有的重要資訊，讓模型在之後的對話中也能參考。
+將筆記附加寫入目前目錄的 `.kai/notes.md`，跨 session 保留。適合記錄專案特有的重要資訊，讓模型在之後的對話中也能參考。
 
 ---
 
@@ -176,7 +176,7 @@ FileViewer 中選取文字後按 `Ctrl+C`，會透過以下流程複製：
 
 ### 歸檔（`/clear`）
 
-執行 `/clear` 時，目前的 `history.json` 會被複製到 `.history/` 目錄，檔名格式為 `YYYYMMDD_HHMMSS_N-turns.json`。之後清空聊天並重置歷史。
+執行 `/clear` 時，目前的 `.kai/history.json` 會被複製到 `.kai/.history/` 目錄，檔名格式為 `YYYYMMDD_HHMMSS_N-turns.json`。之後清空聊天並重置歷史。
 
 以下情況會跳過歸檔：
 - 歷史中只有系統提示訊息（尚未進行實際對話）
@@ -199,7 +199,7 @@ FileViewer 中選取文字後按 `Ctrl+C`，會透過以下流程複製：
 /resume 1
 ```
 
-還原第 1 份歸檔，將該歸檔複製回 `history.json` 並重新載入對話。
+還原第 1 份歸檔，將該歸檔複製回 `.kai/history.json` 並重新載入對話。
 
 ---
 

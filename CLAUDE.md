@@ -42,12 +42,12 @@ core/
   mcp_client.py     → MCP server lifecycle + tool dispatch
   tts.py            → TTS engine abstraction (edge-tts, melotts, kokoro-api, kokoro-onnx)
   file_picker.py    → prompt_toolkit file browser (used by main.py /image)
-  tool_log.py       → tool call debug log (append to tool_calls.log, only when DEBUG_TOOLS=1)
+  tool_log.py       → tool call debug log (append to .kai/tool_calls.log, only when DEBUG_TOOLS=1)
 mixins/             → ChatApp behaviour split into focused mixins (all inherit _MixinBase = ChatApp)
   agents.py         → AgentsMixin: /create-agent, /load-agent, /list-agents, /reload-agent
   bash.py           → BashMixin: ! command execution
   mcp.py            → MCPMixin: /mcp-list, /mcp-reload, /mcp-add, /mcp-del
-  session.py        → SessionMixin: /cd, /compact, /cls, /resume, /model, /rename, /nickname
+  session.py        → SessionMixin: /cd, /compact, /cls, /resume, /model, /rename, /nickname, /reload-config, /init-config
   streaming.py      → StreamingMixin: _send worker, on_token, on_done, TTS playback
 widgets/
   input.py          → HistoryInput, ChatAutoComplete
@@ -58,6 +58,7 @@ widgets/
   agents_screen.py  → AgentsScreen ModalScreen (DataTable agent selector)
   mcp_list.py       → MCPListScreen ModalScreen (MCP server / tool listing)
   resume.py         → ResumeScreen ModalScreen (session archive browser + rename)
+  config_screen.py  → ConfigScreen ModalScreen (runtime config viewer + interactive export)
   utils.py          → shared TUI utilities: _copy_to_clipboard, file icons, _line_height, _wrap_box_drawing
 ```
 
@@ -96,6 +97,7 @@ widgets/
 | `AgentsScreen` | widgets/agents_screen.py | ModalScreen DataTable for /list-agents selection |
 | `MCPListScreen` | widgets/mcp_list.py | ModalScreen showing connected MCP servers + tools |
 | `ResumeScreen` | widgets/resume.py | ModalScreen session archive browser with inline rename |
+| `ConfigScreen` | widgets/config_screen.py | ModalScreen runtime config viewer; Space toggle keys, L→local G→global export |
 
 ### Slash commands
 
@@ -113,7 +115,7 @@ widgets/
 | `/image <path> [q]` | Send image to vision model |
 | `/ask <question>` | Ephemeral question — not saved to history |
 | `/save` | Promote last `/ask` answer into permanent history |
-| `/remember <note>` | Write note to `AGENT_NOTES.md` (persistent across sessions) |
+| `/remember <note>` | Write note to `.kai/notes.md` (persistent across sessions) |
 | `/mcp-list` | Show connected MCP servers and tool descriptions |
 | `/mcp-reload` | Restart MCP servers without quitting the app |
 | `/mcp-add <name> <cmd> [args...]` | Add a new MCP server to `mcp_servers.json` |
@@ -122,6 +124,8 @@ widgets/
 | `/load-agent <name>` | Load an agent config and spawn a new tab |
 | `/list-agents` | Show all agents in `agents/` (AgentsScreen picker) |
 | `/reload-agent` | Re-read `config.json` and hot-swap system prompt in running agent (no tab reload needed) |
+| `/reload-config` | Re-read `.kai/config.json` and apply all settings to the running process |
+| `/init-config` | Open interactive ConfigScreen: select keys, L→`cwd/.kai/config.json`, G→`~/.kai/config.json` |
 | `/tts <engine\|off>` | Switch TTS engine or disable: `edge-tts`, `melotts`, `kokoro-api`, `kokoro`, `off` |
 
 ### `!` bash commands
@@ -227,7 +231,7 @@ Actual streaming is delegated to `core/backends.py`: `stream_ollama` for Ollama 
 
 ### History
 
-`HISTORY_FILE = Path("history.json")` — relative to cwd at runtime. Each project directory has its own history. Archives go to `.history/` (gitignored).
+`HISTORY_FILE = Path(".kai/history.json")` — relative to cwd at runtime. Each project directory has its own history. Archives go to `.kai/.history/` (gitignored).
 
 ### history vs messages distinction
 
@@ -340,7 +344,7 @@ Two config files control MCP servers:
 
 | File | Scope | Purpose |
 |------|-------|---------|
-| `mcp_servers.json` | project-level, checked in | global MCP servers available to all agents |
+| `mcp_servers.json` | kai package dir (global) | MCP servers available to all agents; travels with the kai install, not the project |
 | `agents/<name>/config.json` `.mcp_servers` | agent-level | extra servers for a specific agent |
 
 Disabled servers use a `_` prefix in `mcp_servers.json` (e.g. `_playwright`, `_twstock-db`). The `_` prefix convention prevents accidental activation — remove it to enable.
@@ -359,7 +363,7 @@ Disabled servers use a `_` prefix in `mcp_servers.json` (e.g. `_playwright`, `_t
 | `SEARXNG_URL` | `http://localhost:8888/search` | SearXNG API endpoint |
 | `CONTEXT7_API_KEY` | — | Context7 MCP API key |
 
-Only put true overrides in `.env`. Change defaults in `core/config.py`; change per-model context windows in `core/models.py`.
+Config priority (highest → lowest): `cwd/.kai/config.json` > `~/.kai/config.json` > `.env` > code defaults. Use `/init-config` to export current values and `/reload-config` to hot-apply changes. Only put API keys in `.env`; all other tuning belongs in `.kai/config.json`. Change hardcoded defaults in `core/config.py`; per-model context windows in `core/models.py`.
 
 ## SearXNG
 
