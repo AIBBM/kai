@@ -10,14 +10,33 @@ REQUIRED_FIELDS = {"name", "model", "system_prompt"}
 
 GLOBAL_AGENTS_DIR = Path.home() / ".kai" / "agents"
 
-CREATE_AGENT_PROMPT = """\
+DESIGN_SYSTEM_PROMPT = """\
+你是一個 AI agent 設計師。根據以下資訊，為 agent 設計 system prompt 和開場白。
+
+Agent 名稱：{name}
+用途描述：{description}
+
+請輸出 JSON（不要加任何說明文字，只輸出 JSON）：
+
+{{
+  "system_prompt": "完整的 system prompt，包含角色定義、專業知識、行為規範、回覆風格",
+  "greeting": "開場白觸發 prompt，例如：「請以你的角色主動打招呼，介紹你自己和你能提供的幫助」"
+}}
+
+設計原則：
+- system_prompt 要具體、有深度，包含專業術語和邊界條件
+- system_prompt 需涵蓋角色定義、核心能力、回答風格、限制範圍
+"""
+
+
+DESIGN_FULL_PROMPT = """\
 你是一個 AI agent 設計師。根據用戶的描述，設計一個完整的 AI agent 設定。
 
 用戶描述：{description}
 
 可用模型：{models}
 
-請輸出一個 JSON（不要加任何說明文字，只輸出 JSON），格式如下：
+請輸出 JSON（不要加任何說明文字，只輸出 JSON），格式如下：
 
 {{
   "name": "agent 的顯示名稱（中文可以）",
@@ -25,9 +44,9 @@ CREATE_AGENT_PROMPT = """\
   "model": "選擇最適合的模型名稱",
   "system_prompt": "完整的 system prompt，包含角色定義、專業知識、行為規範、回覆風格",
   "greeting": "開場白觸發 prompt，例如：「請以你的角色主動打招呼，介紹你自己和你能提供的幫助」",
+  "description": "一句話說明這個 agent 的用途",
   "mcp_servers": {{}},
-  "history_keep": 15,
-  "description": "一句話說明這個 agent 的用途"
+  "history_keep": 15
 }}
 
 設計原則：
@@ -36,7 +55,53 @@ CREATE_AGENT_PROMPT = """\
 - model 選擇依任務性質：需要思考選 gemini-2.5-flash，純對話選 deepseek-v4-flash，需視覺選 qwen3-vl:4b
 - mcp_servers 保持空物件（用戶可自行擴充）
 - history_keep 依任務複雜度調整（10-30）
+- 若描述中有「語音」「朗讀」「TTS」「說話」，在 JSON 最後加入：
+  "tts": {{"engine": "edge-tts", "voice": "zh-TW-HsiaoChenNeural", "player": "ffplay", "speed": 1.0}}
+  中文 voice：zh-TW-HsiaoChenNeural（女）/ zh-TW-YunJheNeural（男）；英文：en-US-AriaNeural
+  否則整個 tts 欄位省略
 """
+
+
+async def _call_backend(design_model: str, messages: list[dict]) -> str:
+    """直接呼叫 ollama / openai-compat backend，回傳原始文字。"""
+    import core.config as _cfg
+    from core.models import get_profile
+    profile = get_profile(design_model)
+    if profile.backend == "ollama":
+        import ollama
+        resp = await ollama.AsyncClient().chat(model=profile.name, messages=messages)
+        return resp.message.content or ""
+    from openai import AsyncOpenAI
+    if profile.backend == "gemini":
+        client = AsyncOpenAI(
+            api_key=_cfg.GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        )
+    else:
+        client = AsyncOpenAI(api_key=_cfg.DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    resp = await client.chat.completions.create(model=profile.name, messages=messages)
+    return resp.choices[0].message.content or ""
+
+
+async def call_full_design(description: str) -> dict[str, Any]:
+    """用 CREATE_AGENT_MODEL 從自由文字描述生成完整 agent config dict。"""
+    import core.config as _cfg
+    from core.models import REGISTRY
+    design_model = _cfg.CREATE_AGENT_MODEL or _cfg.MODEL
+    model_list = ", ".join(REGISTRY.keys())
+    prompt = DESIGN_FULL_PROMPT.format(description=description, models=model_list)
+    raw = await _call_backend(design_model, [{"role": "user", "content": prompt}])
+    return extract_json(raw)
+
+
+async def call_design_model(name: str, description: str) -> tuple[str, str]:
+    """用 CREATE_AGENT_MODEL 生成 system_prompt 和 greeting，回傳 (system_prompt, greeting)。"""
+    import core.config as _cfg
+    design_model = _cfg.CREATE_AGENT_MODEL or _cfg.MODEL
+    prompt = DESIGN_SYSTEM_PROMPT.format(name=name, description=description or name)
+    raw = await _call_backend(design_model, [{"role": "user", "content": prompt}])
+    data = extract_json(raw)
+    return data.get("system_prompt", ""), data.get("greeting", "")
 
 
 def _slugify(name: str) -> str:

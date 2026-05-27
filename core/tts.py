@@ -13,14 +13,17 @@ from typing import Any
 
 from loguru import logger
 
-_PLAYERS = ["mpv", "ffplay", "mplayer", "mpg123"]
+_PLAYERS_MP3 = ["mpg123", "mpv", "ffplay", "mplayer"]
+_PLAYERS_WAV = ["paplay", "mpg123", "mpv", "ffplay", "mplayer"]
 
 # kokoro 模型單例（第一次呼叫時載入，之後重用）
 _kokoro_model: Any = None
 
 
-def _detect_player() -> str | None:
-    for p in _PLAYERS:
+def _detect_player(ext: str = "") -> str | None:
+    """依副檔名選最輕量的播放器。.wav/.ogg 優先 paplay；.mp3 優先 mpg123。"""
+    candidates = _PLAYERS_WAV if ext in (".wav", ".ogg", ".flac") else _PLAYERS_MP3
+    for p in candidates:
         if shutil.which(p):
             return p
     return None
@@ -37,34 +40,34 @@ def _player_cmd(player: str, path: str) -> list[str] | None:
             return ["mplayer", "-really-quiet", path]
         case "mpg123":
             return ["mpg123", "-q", path]
+        case "paplay":
+            return ["paplay", path]
         case "powershell":
             return None  # 交給下方 PowerShell 分支處理
         case _:
             return [player, path]
 
 
-async def _play_file(path: str, player: str = "auto") -> None:
-    """播放音訊檔；CancelledError 時 kill 子程序。
-    player="powershell" 強制走 Windows 原生音訊（WSL2 最乾淨）。
-    """
-    # 決定播放指令
-    use_powershell = False
-    if player == "powershell":
-        use_powershell = True
-        cmd: list[str] = []  # placeholder，下方覆寫
-    else:
-        resolved = player if player != "auto" else _detect_player()
+def _play_file_sync(path: str, player: str = "auto") -> None:
+    """播放音訊（同步）。TTS 執行緒專用，不觸發 asyncio ThreadedChildWatcher。"""
+    use_powershell = player == "powershell"
+    cmd: list[str] = []
+
+    if not use_powershell and player != "powershell":
+        ext = Path(path).suffix.lower()
+        resolved = player if player != "auto" else _detect_player(ext)
         if resolved:
-            cmd = _player_cmd(resolved, path)  # type: ignore[assignment]
+            cmd = _player_cmd(resolved, path) or []  # type: ignore[assignment]
         else:
             use_powershell = True
-            cmd = []
 
     if use_powershell:
         try:
-            win_path = subprocess.check_output(
-                ["wslpath", "-w", path], stderr=subprocess.DEVNULL
-            ).decode().strip()
+            result = subprocess.run(
+                ["wslpath", "-w", path],
+                capture_output=True, text=True, timeout=5,
+            )
+            win_path = result.stdout.strip()
         except Exception:
             logger.warning("tts: wslpath 轉換失敗，無法播放")
             return
@@ -77,7 +80,6 @@ async def _play_file(path: str, player: str = "auto") -> None:
             )
         else:
             win_path_fwd = win_path.replace(chr(92), "/")
-            # polling 等待 NaturalDuration 就緒再等播完，不用估時長
             script = (
                 "Add-Type -AssemblyName presentationCore; "
                 "$m = New-Object System.Windows.Media.MediaPlayer; "
@@ -92,23 +94,17 @@ async def _play_file(path: str, player: str = "auto") -> None:
             )
         cmd = ["powershell.exe", "-NoProfile", "-Command", script]
 
-    player_label = "powershell" if use_powershell else (resolved if not use_powershell else "powershell")
-    proc: asyncio.subprocess.Process | None = None
+    if not cmd:
+        logger.warning("tts: 無可用播放器")
+        return
+
+    player_label = "powershell" if use_powershell else player
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
         logger.info(f"tts play start: {Path(path).name}  player={player_label}")
-        _t0 = asyncio.get_event_loop().time()
-        await proc.wait()
-        logger.info(f"tts play end: {Path(path).name}  elapsed={asyncio.get_event_loop().time() - _t0:.2f}s")
-    except asyncio.CancelledError:
-        if proc and proc.returncode is None:
-            proc.kill()
-        logger.info(f"tts play cancelled: {Path(path).name}")
-        raise
+        _t0 = __import__("time").perf_counter()
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc.wait()
+        logger.info(f"tts play end: {Path(path).name}  elapsed={__import__('time').perf_counter() - _t0:.2f}s")
     except Exception as e:
         logger.warning(f"tts 播放失敗：{e}")
 
@@ -185,9 +181,7 @@ async def _speak_melotts(
                     os.close(fd)
                     try:
                         urllib.request.urlretrieve(url, tmp)
-                        await _play_file(tmp, player)
-                    except asyncio.CancelledError:
-                        raise
+                        _play_file_sync(tmp, player)
                     except Exception as e:
                         logger.warning(f"tts melotts 播放失敗：{e}")
                     finally:
@@ -272,9 +266,7 @@ async def _speak_kokoro(
     os.close(fd)
     try:
         sf.write(tmp, samples, sample_rate)
-        await _play_file(tmp, player)
-    except asyncio.CancelledError:
-        raise
+        _play_file_sync(tmp, player)
     except Exception as e:
         logger.warning(f"tts kokoro 播放失敗：{e}")
     finally:
@@ -340,9 +332,7 @@ async def _speak_kokoro_api(
             logger.debug(f"tts kokoro-api: {_orig_s:.1f}s → {len(_data)/_sr:.1f}s (trimmed {_orig_s - len(_data)/_sr:.1f}s noise)")
         except Exception as _e:
             logger.warning(f"tts kokoro-api: trim 失敗（仍嘗試播放）：{_e}")
-        await _play_file(tmp, player)
-    except asyncio.CancelledError:
-        raise
+        _play_file_sync(tmp, player)
     except Exception as e:
         logger.warning(f"tts kokoro-api 播放失敗：{e}")
     finally:
@@ -391,9 +381,7 @@ async def speak(
     try:
         communicate = edge_tts.Communicate(text, voice)
         await communicate.save(tmp)
-        await _play_file(tmp, player)
-    except asyncio.CancelledError:
-        raise
+        _play_file_sync(tmp, player)
     except Exception as e:
         logger.warning(f"tts 失敗：{e}")
     finally:

@@ -22,11 +22,45 @@ _LIST_AGENTS_TOOL = {
     },
 }
 
+_LIST_OPEN_AGENTS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "list_open_agents",
+        "description": (
+            "查詢目前已開啟的 agent tab 清單。"
+            "收到「開啟 XXX」請求時，**先呼叫此工具**確認是否已開啟："
+            "已開啟 → 呼叫 load_agent 切換過去；未開啟 → 呼叫 load_agent 載入。"
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}
+
+_DESIGN_SYSTEM_PROMPT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "design_system_prompt",
+        "description": (
+            "呼叫專用設計模型（CREATE_AGENT_MODEL）生成高品質的 agent system_prompt 和 greeting。"
+            "建立 agent 的標準流程：先呼叫此工具取得 system_prompt，再呼叫 create_agent。"
+            "例外：用戶已明確提供完整 system_prompt 時可直接呼叫 create_agent。"
+            "**必須呼叫此工具取得 system_prompt，嚴禁自行撰寫後跳過。**"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name":        {"type": "string", "description": "agent 名稱"},
+                "description": {"type": "string", "description": "agent 的詳細用途描述"},
+            },
+            "required": ["name", "description"],
+        },
+    },
+}
+
 _LOAD_AGENT_TOOL = {
     "type": "function",
     "function": {
         "name": "load_agent",
-        "description": "載入並開啟一個 agent tab。當用戶說「幫我開 XXX agent」、「載入 XXX」時使用。**必須呼叫此工具才能實際開啟，嚴禁只用文字假裝已載入。**",
+        "description": "載入或切換到一個 agent tab。請先呼叫 list_open_agents 確認狀態，再呼叫此工具。**必須呼叫此工具才能實際開啟或切換，嚴禁只用文字假裝已載入。**",
         "parameters": {
             "type": "object",
             "properties": {
@@ -256,10 +290,18 @@ class AppToolsMixin(_MixinBase):
                         "name":          {"type": "string", "description": "agent 顯示名稱（中文可以）"},
                         "nickname":      {"type": "string", "description": "簡短暱稱 2-4 字，省略則同 name"},
                         "model":         {"type": "string", "description": f"模型名稱，可用：{models_str}"},
-                        "system_prompt": {"type": "string", "description": "完整 system prompt，包含角色定義、專業知識、行為規範、回覆風格"},
+                        "system_prompt": {"type": "string", "description": "完整 system prompt；請先呼叫 design_system_prompt 取得"},
                         "description":   {"type": "string", "description": "一行說明這個 agent 的用途"},
                         "greeting":      {"type": "string", "description": "首次對話時 AI 主動開場的 prompt，可省略"},
                         "global_scope":  {"type": "boolean", "description": "true = 存到 ~/.kai/agents/（跨專案）；false = 存到 cwd/agents/（預設）"},
+                        "tts": {
+                            "type": "object",
+                            "description": (
+                                "語音設定。用戶提到「需要語音」「語音朗讀」「TTS」「說話」時填入，否則省略。"
+                                "格式：{\"engine\": \"edge-tts\", \"voice\": \"zh-TW-HsiaoChenNeural\", \"player\": \"powershell\", \"speed\": 1.0}。"
+                                "中文 voice：zh-TW-HsiaoChenNeural（女）/ zh-TW-YunJheNeural（男）；英文：en-US-AriaNeural。"
+                            ),
+                        },
                     },
                     "required": ["name", "model", "system_prompt"],
                 },
@@ -285,13 +327,16 @@ class AppToolsMixin(_MixinBase):
             "\n\n## 🖥️ App 操作工具（extra tools）\n"
             "以下工具直接操作應用程式介面（開啟/關閉 tab、切換目錄、寫入檔案等）。\n"
             "**嚴禁用文字假裝已執行——必須呼叫對應工具，操作才會真正發生。**\n"
-            "可用工具：list_agents、create_agent、load_agent、close_agent、delete_agent、"
-            "reload_agent、change_dir、switch_model、remember、rename_session、"
+            "收到「開啟/載入 agent」請求時，必須先呼叫 list_open_agents 確認目前狀態，再決定是否呼叫 load_agent。\n"
+            "可用工具：list_open_agents、list_agents、design_system_prompt、create_agent、load_agent、"
+            "close_agent、delete_agent、reload_agent、change_dir、switch_model、remember、rename_session、"
             "reload_config、compact_history、list_mcp、add_mcp、remove_mcp、reload_mcp、set_tts。"
         )
 
         agent.extra_tools = [
+            _LIST_OPEN_AGENTS_TOOL,
             _LIST_AGENTS_TOOL,
+            _DESIGN_SYSTEM_PROMPT_TOOL,
             create_agent_tool,
             _LOAD_AGENT_TOOL,
             _CLOSE_AGENT_TOOL,
@@ -310,8 +355,10 @@ class AppToolsMixin(_MixinBase):
             _SET_TTS_TOOL,
         ]
         agent.extra_tools_map = {
-            "list_agents":      self._app_list_agents,
-            "create_agent":     self._app_create_agent,
+            "list_open_agents":      self._app_list_open_agents,
+            "list_agents":           self._app_list_agents,
+            "design_system_prompt":  self._app_design_system_prompt,
+            "create_agent":          self._app_create_agent,
             "load_agent":       self._app_load_agent,
             "close_agent":      self._app_close_agent,
             "delete_agent":     self._app_delete_agent,
@@ -330,6 +377,32 @@ class AppToolsMixin(_MixinBase):
         }
 
     # ── callbacks ─────────────────────────────────────────────────────────────
+
+    async def _app_list_open_agents(self) -> str:
+        from textual.widgets import TabbedContent
+        tabs = getattr(self, "_agent_tabs", {})
+        if not tabs:
+            return "目前沒有任何已開啟的 agent tab。"
+        try:
+            tc = self.query_one("#center-tabs", TabbedContent)
+            active_tab = tc.active
+        except Exception:
+            active_tab = None
+        lines = ["目前已開啟的 agent tab："]
+        for tab_id, agent in tabs.items():
+            name = agent.display_name
+            active_mark = "（目前聚焦）" if tab_id == active_tab else ""
+            lines.append(f"- {name}  [tab_id: {tab_id}]{active_mark}")
+        return "\n".join(lines)
+
+    async def _app_design_system_prompt(self, name: str, description: str) -> str:
+        import json
+        from core.agent_factory import call_design_model
+        import core.config as _cfg
+        design_model = _cfg.CREATE_AGENT_MODEL or _cfg.MODEL
+        self.notify(f"設計 system prompt 中…（{design_model}）", timeout=30)
+        system_prompt, greeting = await call_design_model(name, description)
+        return json.dumps({"system_prompt": system_prompt, "greeting": greeting}, ensure_ascii=False)
 
     async def _app_list_agents(self) -> str:
         from core.agent_factory import list_agents
@@ -353,10 +426,11 @@ class AppToolsMixin(_MixinBase):
         description: str = "",
         greeting: str = "",
         global_scope: bool = False,
+        tts: "dict | None" = None,
     ) -> str:
         from core.agent_factory import save_agent, validate_agent
         from widgets.tree import FileTree
-        data = {
+        data: dict = {
             "name": name,
             "nickname": nickname or name,
             "model": model,
@@ -366,6 +440,8 @@ class AppToolsMixin(_MixinBase):
             "mcp_servers": {},
             "history_keep": 15,
         }
+        if tts:
+            data["tts"] = tts
         missing = validate_agent(data)
         if missing:
             return f"缺少必要欄位：{missing}"
@@ -379,6 +455,19 @@ class AppToolsMixin(_MixinBase):
 
     async def _app_load_agent(self, name: str) -> str:
         from core.agent_factory import find_agent
+        from textual.widgets import TabbedContent
+        # 若已開啟，直接切換 tab
+        q = name.lower()
+        for tab_id, agent in getattr(self, "_agent_tabs", {}).items():
+            dn = agent.display_name.lower()
+            nick = (agent._nickname or "").lower()
+            if q == dn or q == nick or q in dn or (nick and q in nick):
+                try:
+                    tc = self.query_one("#center-tabs", TabbedContent)
+                    tc.active = tab_id
+                except Exception:
+                    pass
+                return f"✅ {agent.display_name} 已開啟中，已切換過去。"
         resolved = find_agent(name)
         if not resolved:
             return f"找不到 agent：{name}，可用 list_agents 查詢所有可用 agent。"

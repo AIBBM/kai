@@ -135,22 +135,17 @@ class StreamingMixin(_MixinBase):
                 self.query_one("#file-tree", FileTree).refresh_tree()
                 if at_bot:
                     msgs.scroll_end(animate=False)
-                # TTS：整段回覆完成後一次播放，等前一個完全結束才開新的
+                # TTS：整段回覆完成後在獨立執行緒播放，完全隔離 Textual event loop
                 _tts_cfg = getattr(agent, "_tts_config", None)
                 if _tts_cfg and _display and not ephemeral:
                     from core.tts import speak
                     from loguru import logger as _log
-                    _prev = getattr(self, "_tts_task", None)
+                    _prev = getattr(self, "_tts_future", None)
                     if _prev and not _prev.done():
                         _prev.cancel()
-                        try:
-                            await _prev
-                        except Exception:
-                            pass
                     _engine = _tts_cfg.get("engine", "edge-tts")
                     _log.debug(f"tts: schedule engine={_engine} chars={len(_display)}")
-                    self._tts_task = asyncio.create_task(speak(
-                        _display,
+                    _tts_kw = dict(
                         voice=_tts_cfg.get("voice", "en-US-AriaNeural"),
                         player=_tts_cfg.get("player", "auto"),
                         engine=_engine,
@@ -158,7 +153,10 @@ class StreamingMixin(_MixinBase):
                         host=_tts_cfg.get("host", "localhost"),
                         port=int(_tts_cfg.get("port", 8886)),
                         speed=float(_tts_cfg.get("speed", 1.0)),
-                    ))
+                    )
+                    self._tts_future = asyncio.get_event_loop().run_in_executor(
+                        None, lambda: asyncio.run(speak(_display, **_tts_kw))
+                    )
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
                 nonlocal stream_msg, buf

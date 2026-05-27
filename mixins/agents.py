@@ -3,15 +3,13 @@ from __future__ import annotations
 
 from textual import work
 from textual.containers import VerticalScroll
-from textual.widgets import Static, TabbedContent, TabPane
+from textual.widgets import TabbedContent, TabPane
 
 from core.agent import Agent
 
 from core.models import REGISTRY
 from mixins.streaming import SPINNER
 from widgets.input import HistoryInput
-from widgets.tree import FileTree
-
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,38 +21,32 @@ else:
 class AgentsMixin(_MixinBase):
     @work(exclusive=True)
     async def _do_create_agent(self, description: str) -> None:
-        from core.agent_factory import CREATE_AGENT_PROMPT, extract_json, save_agent, validate_agent
+        import core.config as _cfg
+        from core.agent_factory import call_full_design, save_agent, validate_agent
+        from textual.widgets import Static
+        from widgets.tree import FileTree
+
         global_scope = "--global" in description.split()
         if global_scope:
             description = description.replace("--global", "").strip()
+
         msgs = self._active_msgs()
         prompt = self.query_one("#prompt", HistoryInput)
         prompt.disabled = True
-        prompt.border_title = f"{SPINNER[0]} 設計 agent 中…"
+        design_model = _cfg.CREATE_AGENT_MODEL or _cfg.MODEL
+        prompt.border_title = f"{SPINNER[0]} 設計 agent 中（{design_model}）…"
         _spin_idx = 0
 
         def _tick() -> None:
             nonlocal _spin_idx
             _spin_idx = (_spin_idx + 1) % len(SPINNER)
-            prompt.border_title = f"{SPINNER[_spin_idx]} 設計 agent 中…"
+            prompt.border_title = f"{SPINNER[_spin_idx]} 設計 agent 中（{design_model}）…"
 
         timer = self.set_interval(0.08, _tick)
-        await msgs.mount(Static(f"🏭 正在設計 agent：{description}", markup=False, classes="bash-output"))
+        await msgs.mount(Static(f"🏭 設計中：{description}", markup=False, classes="bash-output"))
         msgs.scroll_end(animate=False)
-        model_list = ", ".join(REGISTRY.keys())
-        prompt_text = CREATE_AGENT_PROMPT.format(description=description, models=model_list)
-        _history_snapshot = [m.copy() for m in self.agent.history]
         try:
-            reply_parts: list[str] = []
-            async def _collect(chunk: str) -> None:
-                reply_parts.append(chunk)
-            await self.agent.chat(
-                {"role": "user", "content": prompt_text},
-                on_token=_collect,
-                on_done=None,
-            )
-            raw = "".join(reply_parts)
-            data = extract_json(raw)
+            data = await call_full_design(description)
             missing = validate_agent(data)
             if missing:
                 self.notify(f"LLM 回覆缺少欄位：{missing}", severity="error")
@@ -62,7 +54,7 @@ class AgentsMixin(_MixinBase):
             adir = save_agent(data, global_scope=global_scope)
             scope_label = f"~/.kai/agents/{adir.name}" if global_scope else f"agents/{adir.name}"
             await msgs.mount(Static(
-                f"✅ Agent 已建立：{data['name']}（{scope_label}/）\n"
+                f"✅ Agent 已建立：{data['name']}（{scope_label}）\n"
                 f"   model: {data['model']}  nickname: {data.get('nickname', '—')}\n"
                 f"   輸入 /load-agent {adir.name} 載入",
                 markup=False, classes="bash-output",
@@ -73,8 +65,6 @@ class AgentsMixin(_MixinBase):
             self.notify(f"建立失敗：{e}", severity="error")
         finally:
             timer.stop()
-            self.agent.history = _history_snapshot
-            self.agent.save_history()
             prompt.disabled = False
             self._update_prompt_title()
             prompt.placeholder = f"傳訊息給 {self.agent.display_name}..."
@@ -82,6 +72,7 @@ class AgentsMixin(_MixinBase):
 
     async def _do_load_agent(self, name: str) -> None:
         from core.agent_factory import find_agent, load_agent
+        from textual.widgets import TabbedContent
         # scope 前綴（來自 AgentsScreen）直接傳入；否則做模糊比對
         if name.startswith(("local:", "global:")):
             resolved = name
@@ -92,6 +83,15 @@ class AgentsMixin(_MixinBase):
         except FileNotFoundError as e:
             self.notify(str(e), severity="error")
             return
+        # 已開啟同一個 agent dir → 切換過去，不重複建 tab
+        for tab_id, existing in list(self._agent_tabs.items()):
+            if getattr(existing, "_agent_dir", None) == adir:
+                tc = self.query_one("#center-tabs", TabbedContent)
+                tc.active = tab_id
+                self.agent = existing
+                display = data.get("nickname") or data["name"]
+                self.notify(f"{display} 已開啟，切換過去", timeout=2)
+                return
         model = data.get("model", self.agent.profile.name)
         if model not in REGISTRY:
             self.notify(f"未知模型：{model}，改用 {self.agent.profile.name}", severity="warning")
@@ -221,6 +221,17 @@ class AgentsMixin(_MixinBase):
         if name != self.agent._nickname:
             changes.append("nickname")
 
+        # TTS 重載
+        tts_raw = data.get("tts")
+        if tts_raw is True:
+            new_tts: dict | None = {"voice": "en-US-AriaNeural"}
+        elif isinstance(tts_raw, dict) and tts_raw:
+            new_tts = tts_raw
+        else:
+            new_tts = None
+        if new_tts != self.agent._tts_config:
+            changes.append("tts")
+
         # model 變更：換 Agent 物件；Agent.__init__ 自動從磁碟載入 history
         if new_model != self.agent.profile.name:
             if new_model not in REGISTRY:
@@ -236,6 +247,7 @@ class AgentsMixin(_MixinBase):
             self.agent.mcp_client = old.mcp_client
             self.agent.mcp_context = getattr(old, "mcp_context", "")
             self.agent._nickname = name
+            self.agent._tts_config = new_tts
             # 同步更新 _agent_tabs 映射
             for tid, ag in list(self._agent_tabs.items()):
                 if ag is old:
@@ -247,6 +259,7 @@ class AgentsMixin(_MixinBase):
             if new_prompt:
                 self.agent._custom_system_prompt = new_prompt
             self.agent._nickname = name
+            self.agent._tts_config = new_tts
             self.agent.history = []
             self.agent._rebuild_system_prompt()   # 先把新 system prompt 放進去
             self.agent._load_history()            # 再從磁碟補入 non-system 訊息
@@ -276,7 +289,7 @@ class AgentsMixin(_MixinBase):
         from widgets.agents_screen import ConfirmDeleteAgentScreen, DeleteAgentsScreen
         from widgets.tree import FileTree
 
-        async def _confirm_and_delete_many(scoped_names: list[str]) -> None:
+        def _confirm_and_delete_many(scoped_names: list[str]) -> None:
             agents_meta: list[tuple[str, str, str]] = []
             for scoped_name in scoped_names:
                 try:
@@ -288,31 +301,29 @@ class AgentsMixin(_MixinBase):
                 scope_path = "~/.kai/agents" if scoped_name.startswith("global:") else "agents"
                 agents_meta.append((agent_name, scope_path, adir.name))
 
-            confirmed = await self.push_screen(
-                ConfirmDeleteAgentScreen(agents_meta),
-                wait_for_dismiss=True,
-            )
-            if not confirmed:
-                return
-            deleted: list[str] = []
-            for scoped_name, (agent_name, _, _) in zip(scoped_names, agents_meta):
-                try:
-                    delete_agent(scoped_name)
-                    deleted.append(agent_name)
-                except Exception as e:
-                    self.notify(f"刪除失敗 {agent_name}：{e}", severity="error")
-            if deleted:
-                names_str = "、".join(deleted)
-                self.notify(f"✅ 已刪除：{names_str}", timeout=4)
-                try:
-                    self.query_one("#file-tree", FileTree).refresh_tree()
-                except Exception:
-                    pass
+            def _on_confirmed(confirmed: bool) -> None:
+                if not confirmed:
+                    return
+                deleted: list[str] = []
+                for scoped_name, (agent_name, _, _) in zip(scoped_names, agents_meta):
+                    try:
+                        delete_agent(scoped_name)
+                        deleted.append(agent_name)
+                    except Exception as e:
+                        self.notify(f"刪除失敗 {agent_name}：{e}", severity="error")
+                if deleted:
+                    self.notify(f"✅ 已刪除：{'、'.join(deleted)}", timeout=4)
+                    try:
+                        self.query_one("#file-tree", FileTree).refresh_tree()
+                    except Exception:
+                        pass
 
-        async def _open_panel(agents_list: list[dict]) -> None:
-            async def _on_selected(selected: list[str]) -> None:
+            self.push_screen(ConfirmDeleteAgentScreen(agents_meta), _on_confirmed)
+
+        def _open_panel(agents_list: list[dict]) -> None:
+            def _on_selected(selected: list[str]) -> None:
                 if selected:
-                    await _confirm_and_delete_many(selected)
+                    _confirm_and_delete_many(selected)
             self.push_screen(DeleteAgentsScreen(agents_list), _on_selected)
 
         if not name:
@@ -320,7 +331,7 @@ class AgentsMixin(_MixinBase):
             if not agents:
                 self.notify("沒有任何 agent 可以刪除", severity="warning")
                 return
-            await _open_panel(agents)
+            _open_panel(agents)
         else:
             from core.agent_factory import find_all_agents
             matches = find_all_agents(name)
@@ -329,10 +340,10 @@ class AgentsMixin(_MixinBase):
                 return
             if len(matches) == 1:
                 scoped = f"{matches[0]['scope']}:{matches[0]['dir']}"
-                await _confirm_and_delete_many([scoped])
+                _confirm_and_delete_many([scoped])
             else:
                 # 同名跨 scope，開面板讓使用者選要刪哪些
-                await _open_panel(matches)
+                _open_panel(matches)
 
     async def _do_list_agents(self) -> None:
         from core.agent_factory import list_agents

@@ -14,6 +14,7 @@ KAI_DIR = Path(".kai")
 _KAI_PKG_DIR = Path(__file__).parent.parent
 
 MODEL = os.getenv("MODEL", "qwen3-vl:4b")  # 使用的 Ollama 模型
+CREATE_AGENT_MODEL = os.getenv("CREATE_AGENT_MODEL", "")  # /create-agent 設計用 model（空字串 = 同 MODEL）
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888/search")  # SearXNG API
 NUM_CTX = int(os.getenv("NUM_CTX", "0"))  # context window 大小，0 表示使用模型預設
 MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "15"))  # 單輪工具呼叫上限
@@ -77,6 +78,7 @@ def current_kai_config() -> dict:
     g = globals()
     return {
         "model":                  g["MODEL"],
+        "create_agent_model":     g["CREATE_AGENT_MODEL"],
         "history_keep":           g["HISTORY_KEEP"],
         "debug_tools":            g["DEBUG_TOOLS"],
         "temperature":            g["TEMPERATURE"],
@@ -100,7 +102,8 @@ def current_kai_config() -> dict:
 def apply_kai_config(cfg: dict) -> None:
     """將 config dict 套用到 module globals。API key 類不支援（留在 .env）。"""
     g = globals()
-    _STR   = {"model": "MODEL", "searxng_url": "SEARXNG_URL", "username": "USERNAME"}
+    _STR   = {"model": "MODEL", "create_agent_model": "CREATE_AGENT_MODEL",
+              "searxng_url": "SEARXNG_URL", "username": "USERNAME"}
     _INT   = {"history_keep": "HISTORY_KEEP", "num_ctx": "NUM_CTX",
               "max_tool_calls": "MAX_TOOL_CALLS", "max_search_chars": "MAX_SEARCH_CHARS",
               "search_num_results": "SEARCH_NUM_RESULTS", "search_retries": "SEARCH_RETRIES",

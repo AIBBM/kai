@@ -1,0 +1,81 @@
+# kai 外部服務
+#
+# 啟動方式：
+#   docker compose up -d                          # 只啟 SearXNG（搜尋）
+#   docker compose --profile tts up -d            # + MeloTTS + kokoro-fastapi
+#   docker compose --profile db up -d             # + PostgreSQL/TimescaleDB
+#   docker compose --profile tts --profile db up -d  # 全部
+
+services:
+
+  # ── Search ──────────────────────────────────────────────────────────────────
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    networks: [kai-net]
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng
+    networks: [kai-net]
+    ports: ["8888:8080"]
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      BASE_URL: http://localhost:8888/
+    depends_on: [valkey]
+    restart: unless-stopped
+
+  # ── TTS（--profile tts）─────────────────────────────────────────────────────
+
+  melotts:
+    image: melotts
+    networks: [kai-net]
+    ports: ["8886:8888"]
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles: [tts]
+    restart: unless-stopped
+
+  kokoro:
+    image: kokoro-fastapi-gpu
+    networks: [kai-net]
+    ports: ["8885:8880"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles: [tts]
+    restart: unless-stopped
+
+  # ── Database（--profile db）─────────────────────────────────────────────────
+
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    networks: [kai-net]
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_DB: twstock
+      POSTGRES_USER: mcpuser
+      POSTGRES_PASSWORD: REDACTED
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    profiles: [db]
+    restart: unless-stopped
+
+networks:
+  kai-net:
+    driver: bridge
+
+volumes:
+  postgres-data:

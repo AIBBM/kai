@@ -311,7 +311,7 @@ Each agent directory contains a `config.json`. All fields:
 | `engine` | `"edge-tts"` | `"edge-tts"` / `"melotts"` / `"kokoro-api"` / `"kokoro"` |
 | `voice` | 依 engine | 見下方 voice 表 |
 | `lang` | `"en-us"` | 見下方 lang 表 |
-| `player` | `"auto"` | `"powershell"`（WSL2 建議）/ `"mpv"` / `"ffplay"` / `"auto"` |
+| `player` | `"auto"` | `"auto"` / `"mpg123"` / `"paplay"` / `"ffplay"` / `"mpv"` |
 | `host` | `"localhost"` | Docker server 位址 |
 | `port` | 8886 | melotts=8886，kokoro-api=8885 |
 | `speed` | `1.0` | 語速倍率 |
@@ -324,6 +324,21 @@ Each agent directory contains a `config.json`. All fields:
 | `melotts` | `"EN-US"` `"EN-BR"` `"EN-AU"` `"ZH"` | `"en"` `"zh"` `"fr"` `"jp"` |
 | `kokoro-api` | `"af_bella"` `"af_sky"` `"am_adam"` | `"en-us"` |
 | `kokoro` | `"af_sky"` `"af_bella"` | `"en-us"` `"en-gb"` |
+
+**`player` 自動選擇邏輯（`"auto"`）：**
+
+| 格式 | 優先順序 |
+|------|---------|
+| MP3（edge-tts） | `mpg123` → `mpv` → `ffplay` → `mplayer` |
+| WAV/OGG（kokoro / melotts） | `paplay` → `mpg123` → `mpv` → `ffplay` |
+
+**WSL2 安裝建議（`player: "auto"` 前提）：**
+
+```bash
+sudo apt install mpg123 pulseaudio-utils   # mpg123=MP3, paplay=WAV
+```
+
+WSLg（Windows 11 21H2+）必須啟用，`$PULSE_SERVER` 才會有值。勿用 `"player": "powershell"`，會造成打字輸入卡頓。
 
 ### Agent system prompt 更新
 
