@@ -263,6 +263,7 @@ AutoComplete .autocomplete--highlight-match {
 }
 
 .cap-badge {
+    width: auto;
     height: 1;
     min-width: 8;
     margin: 0 1 0 0;

@@ -272,49 +272,67 @@ class AgentsMixin(_MixinBase):
         self.notify(f"✅ {name} 已重載：{change_str}", timeout=4)
 
     async def _do_delete_agent(self, name: str) -> None:
-        from core.agent_factory import find_agent, list_agents, load_agent, delete_agent
-        from widgets.agents_screen import AgentsScreen, ConfirmDeleteAgentScreen
+        from core.agent_factory import list_agents, load_agent, delete_agent
+        from widgets.agents_screen import ConfirmDeleteAgentScreen, DeleteAgentsScreen
         from widgets.tree import FileTree
 
-        async def _confirm_and_delete(scoped_name: str) -> None:
-            try:
-                data, adir = load_agent(scoped_name)
-            except FileNotFoundError as e:
-                self.notify(str(e), severity="error")
-                return
-            agent_name = data.get("name", adir.name)
-            scope_path = "~/.kai/agents" if scoped_name.startswith("global:") else "agents"
+        async def _confirm_and_delete_many(scoped_names: list[str]) -> None:
+            agents_meta: list[tuple[str, str, str]] = []
+            for scoped_name in scoped_names:
+                try:
+                    data, adir = load_agent(scoped_name)
+                except FileNotFoundError as e:
+                    self.notify(str(e), severity="error")
+                    return
+                agent_name = data.get("name", adir.name)
+                scope_path = "~/.kai/agents" if scoped_name.startswith("global:") else "agents"
+                agents_meta.append((agent_name, scope_path, adir.name))
+
             confirmed = await self.push_screen(
-                ConfirmDeleteAgentScreen(agent_name, scope_path, adir.name),
+                ConfirmDeleteAgentScreen(agents_meta),
                 wait_for_dismiss=True,
             )
             if not confirmed:
                 return
-            try:
-                delete_agent(scoped_name)
-            except Exception as e:
-                self.notify(f"刪除失敗：{e}", severity="error")
-                return
-            self.notify(f"✅ 已刪除 agent：{agent_name}", timeout=3)
-            try:
-                self.query_one("#file-tree", FileTree).refresh_tree()
-            except Exception:
-                pass
+            deleted: list[str] = []
+            for scoped_name, (agent_name, _, _) in zip(scoped_names, agents_meta):
+                try:
+                    delete_agent(scoped_name)
+                    deleted.append(agent_name)
+                except Exception as e:
+                    self.notify(f"刪除失敗 {agent_name}：{e}", severity="error")
+            if deleted:
+                names_str = "、".join(deleted)
+                self.notify(f"✅ 已刪除：{names_str}", timeout=4)
+                try:
+                    self.query_one("#file-tree", FileTree).refresh_tree()
+                except Exception:
+                    pass
+
+        async def _open_panel(agents_list: list[dict]) -> None:
+            async def _on_selected(selected: list[str]) -> None:
+                if selected:
+                    await _confirm_and_delete_many(selected)
+            self.push_screen(DeleteAgentsScreen(agents_list), _on_selected)
 
         if not name:
             agents = list_agents()
             if not agents:
                 self.notify("沒有任何 agent 可以刪除", severity="warning")
                 return
-
-            async def _on_selected(scoped_name: str | None) -> None:
-                if scoped_name:
-                    await _confirm_and_delete(scoped_name)
-
-            self.push_screen(AgentsScreen(agents, mode="delete"), _on_selected)
+            await _open_panel(agents)
         else:
-            scoped = find_agent(name) or name
-            await _confirm_and_delete(scoped)
+            from core.agent_factory import find_all_agents
+            matches = find_all_agents(name)
+            if not matches:
+                self.notify(f"找不到 agent：{name}", severity="error")
+                return
+            if len(matches) == 1:
+                scoped = f"{matches[0]['scope']}:{matches[0]['dir']}"
+                await _confirm_and_delete_many([scoped])
+            else:
+                # 同名跨 scope，開面板讓使用者選要刪哪些
+                await _open_panel(matches)
 
     async def _do_list_agents(self) -> None:
         from core.agent_factory import list_agents

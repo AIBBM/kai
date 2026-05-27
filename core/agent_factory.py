@@ -104,10 +104,31 @@ def list_agents() -> list[dict[str, Any]]:
     return result
 
 
+def _name_matches(a: dict[str, Any], q: str) -> bool:
+    """精確或 substring 比對 name / nickname（不含 dir）。"""
+    name = a["name"].lower()
+    nick = (a["nickname"] or "").lower()
+    return q == name or q == nick or q in name or bool(nick and q in nick)
+
+
+def find_all_agents(query: str) -> list[dict[str, Any]]:
+    """回傳所有符合 query 的 agent dict（含 scope 欄位），local 排前面。
+
+    比對：精確 dir 名、精確/substring name 或 nickname。
+    """
+    q = query.strip().lower()
+    return [a for a in list_agents() if a["dir"].lower() == q or _name_matches(a, q)]
+
+
 def find_agent(query: str) -> str | None:
     """模糊比對 agent，回傳 "local:<dir>" 或 "global:<dir>"；找不到回傳 None。
 
-    比對順序：精確 dir → name/nickname 包含 query → query 包含 name/nickname → description。
+    比對優先順序：
+      1. 精確 dir 名
+      2. 精確 name 或 nickname
+      3. name / nickname 包含 query（substring）
+      4. query 包含 name / nickname
+      5. description 包含 query
     同優先級內 local 優先。
     """
     q = query.strip().lower()
@@ -115,6 +136,7 @@ def find_agent(query: str) -> str | None:
 
     checks = [
         lambda a: a["dir"].lower() == q,
+        lambda a: a["name"].lower() == q or (a["nickname"] or "").lower() == q,
         lambda a: q in a["name"].lower() or bool(a["nickname"] and q in a["nickname"].lower()),
         lambda a: a["name"].lower() in q or bool(a["nickname"] and a["nickname"].lower() in q),
         lambda a: bool(a.get("description") and q in a["description"].lower()),
