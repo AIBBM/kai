@@ -54,15 +54,16 @@ class AgentsScreen(ModalScreen[str | None]):
 
     def on_mount(self) -> None:
         dt = self.query_one("#agents-table", DataTable)
-        dt.add_columns("目錄", "名稱", "暱稱", "模型", "說明")
+        dt.add_columns("來源", "名稱", "暱稱", "模型", "說明")
         for a in self._agents:
+            scope_label = "🏠 本地" if a.get("scope") == "local" else "🌐 全域"
             dt.add_row(
-                a["dir"],
+                scope_label,
                 a["name"],
                 a.get("nickname") or "—",
                 a["model"],
                 a.get("description") or "—",
-                key=a["dir"],
+                key=f"{a.get('scope', 'local')}:{a['dir']}",
             )
         dt.focus()
 

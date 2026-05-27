@@ -8,6 +8,8 @@ from typing import Any
 
 REQUIRED_FIELDS = {"name", "model", "system_prompt"}
 
+GLOBAL_AGENTS_DIR = Path.home() / ".kai" / "agents"
+
 CREATE_AGENT_PROMPT = """\
 你是一個 AI agent 設計師。根據用戶的描述，設計一個完整的 AI agent 設定。
 
@@ -44,90 +46,120 @@ def _slugify(name: str) -> str:
     return slug or "agent"
 
 
-def agents_dir() -> Path:
-    """回傳 agents/ 目錄（相對 cwd），不存在則建立。"""
+def local_agents_dir() -> Path:
+    """cwd/agents/（專案專屬，可 commit）。"""
     d = Path.cwd() / "agents"
     d.mkdir(exist_ok=True)
     return d
 
 
-def agent_dir(name: str) -> Path:
-    """回傳 agents/<slug>/ 目錄（不存在則建立）。"""
-    d = agents_dir() / _slugify(name)
+def global_agents_dir() -> Path:
+    """~/.kai/agents/（跨專案共用）。"""
+    d = GLOBAL_AGENTS_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def agents_dir() -> Path:
+    """向後相容別名，回傳 local agents 目錄。"""
+    return local_agents_dir()
+
+
+def agent_dir(name: str, global_scope: bool = False) -> Path:
+    """回傳 agent 目錄（不存在則建立）。"""
+    base = global_agents_dir() if global_scope else local_agents_dir()
+    d = base / _slugify(name)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def list_agents() -> list[dict[str, Any]]:
-    """列出所有 agents/*/config.json，回傳 metadata 清單。"""
+    """列出 local（cwd/agents/）和 global（~/.kai/agents/）的所有 agent。
+
+    回傳清單中每筆有 scope: "local" | "global"。
+    local 排在前面；同一 scope 內按目錄名排序。
+    """
     result = []
-    base = agents_dir()
-    for p in sorted(base.iterdir()):
-        if not p.is_dir():
+    for scope, base in (("local", Path.cwd() / "agents"), ("global", GLOBAL_AGENTS_DIR)):
+        if not base.exists():
             continue
-        cfg = p / "config.json"
-        if not cfg.exists():
-            continue
-        try:
-            data = json.loads(cfg.read_text(encoding="utf-8"))
-            result.append({
-                "dir": p.name,
-                "name": data.get("name", p.name),
-                "nickname": data.get("nickname", ""),
-                "model": data.get("model", ""),
-                "description": data.get("description", ""),
-            })
-        except Exception:
-            pass
+        for p in sorted(base.iterdir()):
+            if not p.is_dir():
+                continue
+            cfg = p / "config.json"
+            if not cfg.exists():
+                continue
+            try:
+                data = json.loads(cfg.read_text(encoding="utf-8"))
+                result.append({
+                    "dir": p.name,
+                    "scope": scope,
+                    "name": data.get("name", p.name),
+                    "nickname": data.get("nickname", ""),
+                    "model": data.get("model", ""),
+                    "description": data.get("description", ""),
+                })
+            except Exception:
+                pass
     return result
 
 
 def find_agent(query: str) -> str | None:
-    """模糊比對 agent，回傳 dir name；找不到回傳 None。
-    比對順序：精確 dir → name/nickname 包含 query → query 包含 name/nickname → description 包含 query。
+    """模糊比對 agent，回傳 "local:<dir>" 或 "global:<dir>"；找不到回傳 None。
+
+    比對順序：精確 dir → name/nickname 包含 query → query 包含 name/nickname → description。
+    同優先級內 local 優先。
     """
     q = query.strip().lower()
     agents = list_agents()
-    # 1. 精確 dir
-    for a in agents:
-        if a["dir"].lower() == q:
-            return a["dir"]
-    # 2. name 或 nickname 完全包含 query
-    for a in agents:
-        if q in a["name"].lower() or (a["nickname"] and q in a["nickname"].lower()):
-            return a["dir"]
-    # 3. query 包含 name 或 nickname（縮寫情況）
-    for a in agents:
-        if a["name"].lower() in q or (a["nickname"] and a["nickname"].lower() in q):
-            return a["dir"]
-    # 4. description 包含 query
-    for a in agents:
-        if a.get("description") and q in a["description"].lower():
-            return a["dir"]
+
+    checks = [
+        lambda a: a["dir"].lower() == q,
+        lambda a: q in a["name"].lower() or bool(a["nickname"] and q in a["nickname"].lower()),
+        lambda a: a["name"].lower() in q or bool(a["nickname"] and a["nickname"].lower() in q),
+        lambda a: bool(a.get("description") and q in a["description"].lower()),
+    ]
+    for check in checks:
+        for scope in ("local", "global"):
+            for a in agents:
+                if a["scope"] == scope and check(a):
+                    return f"{scope}:{a['dir']}"
     return None
 
 
 def load_agent(name: str) -> tuple[dict[str, Any], Path]:
-    """載入 agents/<name>/config.json，回傳 (data, agent_dir_path)。"""
-    base = agents_dir()
-    candidates = [
-        base / name / "config.json",
-        base / _slugify(name) / "config.json",
-        base / name.lower().replace(" ", "-") / "config.json",
-    ]
-    for p in candidates:
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8")), p.parent
-    raise FileNotFoundError(f"找不到 agent：{name}（搜尋路徑：{[str(c.parent) for c in candidates]}）")
+    """載入 agent config。
 
-
-def save_agent(data: dict[str, Any]) -> Path:
-    """儲存 agent config 到 agents/<slug>/config.json，回傳 agent 目錄路徑。
-
-    首次建立時同步寫入初始 history.json（含 system message）；
-    已存在則保留舊 history 不覆蓋。
+    name 可為：
+    - "local:<dir>"  / "global:<dir>"  — 指定 scope
+    - 純 dir 名稱 — 搜尋 local 後再 global
     """
-    d = agent_dir(data["name"])
+    scope: str | None = None
+    if name.startswith("local:"):
+        scope, name = "local", name[6:]
+    elif name.startswith("global:"):
+        scope, name = "global", name[7:]
+
+    bases: list[Path] = []
+    if scope == "local" or scope is None:
+        bases.append(Path.cwd() / "agents")
+    if scope == "global" or scope is None:
+        bases.append(GLOBAL_AGENTS_DIR)
+
+    for base in bases:
+        for candidate in (name, _slugify(name), name.lower().replace(" ", "-")):
+            p = base / candidate / "config.json"
+            if p.exists():
+                return json.loads(p.read_text(encoding="utf-8")), p.parent
+
+    raise FileNotFoundError(
+        f"找不到 agent：{name}（搜尋：{[str(b) for b in bases]}）"
+    )
+
+
+def save_agent(data: dict[str, Any], global_scope: bool = False) -> Path:
+    """儲存 agent config；首次建立時同步寫入初始 history.json。"""
+    d = agent_dir(data["name"], global_scope=global_scope)
     (d / "config.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )

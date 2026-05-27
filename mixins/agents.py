@@ -24,6 +24,9 @@ class AgentsMixin(_MixinBase):
     @work(exclusive=True)
     async def _do_create_agent(self, description: str) -> None:
         from core.agent_factory import CREATE_AGENT_PROMPT, extract_json, save_agent, validate_agent
+        global_scope = "--global" in description.split()
+        if global_scope:
+            description = description.replace("--global", "").strip()
         msgs = self._active_msgs()
         prompt = self.query_one("#prompt", HistoryInput)
         prompt.disabled = True
@@ -56,9 +59,10 @@ class AgentsMixin(_MixinBase):
             if missing:
                 self.notify(f"LLM 回覆缺少欄位：{missing}", severity="error")
                 return
-            adir = save_agent(data)
+            adir = save_agent(data, global_scope=global_scope)
+            scope_label = f"~/.kai/agents/{adir.name}" if global_scope else f"agents/{adir.name}"
             await msgs.mount(Static(
-                f"✅ Agent 已建立：{data['name']}（agents/{adir.name}/）\n"
+                f"✅ Agent 已建立：{data['name']}（{scope_label}/）\n"
                 f"   model: {data['model']}  nickname: {data.get('nickname', '—')}\n"
                 f"   輸入 /load-agent {adir.name} 載入",
                 markup=False, classes="bash-output",
@@ -78,7 +82,11 @@ class AgentsMixin(_MixinBase):
 
     async def _do_load_agent(self, name: str) -> None:
         from core.agent_factory import find_agent, load_agent
-        resolved = find_agent(name) or name  # 支援 name / nickname / dir 模糊比對
+        # scope 前綴（來自 AgentsScreen）直接傳入；否則做模糊比對
+        if name.startswith(("local:", "global:")):
+            resolved = name
+        else:
+            resolved = find_agent(name) or name
         try:
             data, adir = load_agent(resolved)
         except FileNotFoundError as e:
@@ -268,7 +276,7 @@ class AgentsMixin(_MixinBase):
         from widgets.agents_screen import AgentsScreen
         agents = list_agents()
         if not agents:
-            self.notify("agents/ 目錄是空的，用 /create-agent 建立第一個 agent", severity="warning")
+            self.notify("agents/ 和 ~/.kai/agents/ 都是空的，用 /create-agent 建立第一個 agent", severity="warning")
             return
 
         async def _on_result(dir_name: str | None) -> None:
