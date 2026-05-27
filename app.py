@@ -31,6 +31,7 @@ from core.config import USERNAME, apply_kai_config, ensure_kai_dir, load_kai_con
 from core.mcp_client import MCPClient, load_mcp_servers
 from core.models import REGISTRY
 from mixins.agents import AgentsMixin
+from mixins.app_tools import AppToolsMixin
 from mixins.bash import BashMixin
 from mixins.mcp import MCPMixin
 from mixins.session import SessionMixin
@@ -109,7 +110,7 @@ async def _fetch_db_schema(mcp: MCPClient) -> str:
     return ""
 
 
-class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, App[None]):
+class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, StreamingMixin, App[None]):
     CSS_PATH = "app.tcss"
     COMMANDS = App.COMMANDS | {ChatCommands}
 
@@ -135,6 +136,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
         except Exception:
             pass
         self.agent = Agent(model=_kai_cfg.MODEL)
+        self._inject_app_tools(self.agent)
         self.scroll_sensitivity_y = 5.0
         self._spin_idx = 0
         self._spin_label = "生成中"
@@ -258,6 +260,7 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             ("/list-agents", "列出所有已建立的 agents"),
             ("/reload-agent", "重新載入目前 agent 的 config.json（system prompt 熱更新）"),
             ("/delete-agent", "刪除 agent  /delete-agent [name]（省略 name 開面板選）"),
+            ("/close-agent", "關閉 agent tab  /close-agent [name]（省略 name 關目前 tab）"),
             ("/reload-config", "重新載入 .kai/config.json 並套用所有設定"),
             ("/init-config", "互動式 config 面板：選取 key，L→local G→global 匯出"),
             ("/tts", "切換 TTS 引擎  /tts <edge-tts|melotts|kokoro-api|kokoro|off>"),
@@ -586,6 +589,8 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                 await self._do_reload_agent()
             elif cmd == "/delete-agent":
                 await self._do_delete_agent(arg)
+            elif cmd == "/close-agent":
+                await self._app_close_agent(arg)
             elif cmd == "/reload-config":
                 await self.action_reload_config()
             elif cmd == "/init-config":

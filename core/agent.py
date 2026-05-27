@@ -48,6 +48,10 @@ class Agent:
             "fetch_urls": fetch_urls,
             "bash_exec": bash_exec,
         }
+        # app-level tools（由 ChatApp._inject_app_tools 注入，只有 main agent 有）
+        self.extra_tools: list[dict] = []
+        self.extra_tools_map: dict = {}
+        self.extra_tools_note: str = ""  # app tools 使用規則，由 _inject_app_tools 設定
         if _cfg.NUM_CTX:
             self.profile.num_ctx = _cfg.NUM_CTX
         self.mcp_client: "MCPClient | None" = None
@@ -118,6 +122,8 @@ class Agent:
             content = self._resolve_prompt(self._custom_system_prompt, notes_root)
             if notes:
                 content += f"\n\n## 📝 專案記憶\n{notes}\n\n以上規則必須嚴格遵守。"
+            if self.extra_tools_note:
+                content += self.extra_tools_note
             msg = {"role": "system", "content": content}
             if self.history and self.history[0]["role"] == "system":
                 self.history[0] = msg
@@ -216,6 +222,8 @@ class Agent:
                 )
             ),
         }
+        if self.extra_tools_note:
+            system_msg["content"] += self.extra_tools_note
         if self.history and self.history[0]["role"] == "system":
             self.history[0] = system_msg
         else:
@@ -377,6 +385,8 @@ class Agent:
                 active_tools.append(OPEN_AGENT_TOOL)
         if self.profile.supports_tools and self.mcp_client:
             active_tools.extend(self.mcp_client.tools)
+        if self.profile.supports_tools and self.extra_tools:
+            active_tools.extend(self.extra_tools)
 
         self._last_usage: tuple = (None, None)
         self._last_cache_hit: int | None = None
@@ -488,8 +498,9 @@ class Agent:
                     "tool_calls": tool_calls,
                 })
 
+            _dispatch_map = {**self.tools_map, **self.extra_tools_map}
             results = await asyncio.gather(
-                *[run_tool(tc, self.tools_map, self.mcp_client) for tc in tool_calls]
+                *[run_tool(tc, _dispatch_map, self.mcp_client) for tc in tool_calls]
             )
 
             if self._cancelled:
