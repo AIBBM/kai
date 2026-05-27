@@ -175,6 +175,18 @@ def save_agent(data: dict[str, Any], global_scope: bool = False) -> Path:
     return d
 
 
+def delete_agent(scoped_name: str) -> str:
+    """刪除 agent 目錄（含 config.json / history.json），回傳 agent 顯示名稱。"""
+    import shutil
+    _, adir = load_agent(scoped_name)
+    try:
+        display_name = json.loads((adir / "config.json").read_text(encoding="utf-8")).get("name", adir.name)
+    except Exception:
+        display_name = adir.name
+    shutil.rmtree(adir)
+    return display_name
+
+
 def validate_agent(data: dict[str, Any]) -> list[str]:
     """回傳缺少的必要欄位清單。"""
     return [f for f in REQUIRED_FIELDS if not data.get(f)]

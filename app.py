@@ -253,10 +253,11 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
             ("/mcp-del", "移除 MCP server  /mcp-del <name>"),
             ("/rename", "命名目前 session  /rename <名稱>"),
             ("/nickname", "查詢或設定目前模型的暱稱  /nickname [名字]"),
-            ("/create-agent", "用 AI 設計新 agent  /create-agent <描述>"),
+            ("/create-agent", "用 AI 設計新 agent  /create-agent [--global] <描述>"),
             ("/load-agent", "載入 agent 設定  /load-agent <name>"),
             ("/list-agents", "列出所有已建立的 agents"),
             ("/reload-agent", "重新載入目前 agent 的 config.json（system prompt 熱更新）"),
+            ("/delete-agent", "刪除 agent  /delete-agent [name]（省略 name 開面板選）"),
             ("/reload-config", "重新載入 .kai/config.json 並套用所有設定"),
             ("/init-config", "互動式 config 面板：選取 key，L→local G→global 匯出"),
             ("/tts", "切換 TTS 引擎  /tts <edge-tts|melotts|kokoro-api|kokoro|off>"),
@@ -583,6 +584,8 @@ class ChatApp(MCPMixin, AgentsMixin, SessionMixin, BashMixin, StreamingMixin, Ap
                 await self._do_list_agents()
             elif cmd == "/reload-agent":
                 await self._do_reload_agent()
+            elif cmd == "/delete-agent":
+                await self._do_delete_agent(arg)
             elif cmd == "/reload-config":
                 await self.action_reload_config()
             elif cmd == "/init-config":
