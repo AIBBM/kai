@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,32 @@ _PLAYERS_WAV = ["paplay", "mpg123", "mpv", "ffplay", "mplayer"]
 
 # kokoro 模型單例（第一次呼叫時載入，之後重用）
 _kokoro_model: Any = None
+
+_current_proc: subprocess.Popen | None = None  # type: ignore[type-arg]
+_proc_lock = threading.Lock()
+
+_tts_loop: asyncio.AbstractEventLoop | None = None
+_tts_loop_lock = threading.Lock()
+
+
+def get_tts_loop() -> asyncio.AbstractEventLoop:
+    """取得（或建立）持久的 TTS 事件迴圈，整個程序生命週期只建立一次。"""
+    global _tts_loop
+    with _tts_loop_lock:
+        if _tts_loop is None or _tts_loop.is_closed():
+            loop = asyncio.new_event_loop()
+            t = threading.Thread(target=loop.run_forever, daemon=True, name="tts-worker")
+            t.start()
+            _tts_loop = loop
+    return _tts_loop
+
+
+def cancel_current() -> None:
+    """終止當前正在播放的音訊（如有）。可從任何執行緒呼叫。"""
+    with _proc_lock:
+        proc = _current_proc
+    if proc and proc.poll() is None:
+        proc.terminate()
 
 
 def _detect_player(ext: str = "") -> str | None:
@@ -53,7 +80,7 @@ def _play_file_sync(path: str, player: str = "auto") -> None:
     use_powershell = player == "powershell"
     cmd: list[str] = []
 
-    if not use_powershell and player != "powershell":
+    if not use_powershell:
         ext = Path(path).suffix.lower()
         resolved = player if player != "auto" else _detect_player(ext)
         if resolved:
@@ -70,6 +97,9 @@ def _play_file_sync(path: str, player: str = "auto") -> None:
             win_path = result.stdout.strip()
         except Exception:
             logger.warning("tts: wslpath 轉換失敗，無法播放")
+            return
+        if not win_path:
+            logger.warning("tts: wslpath 回傳空路徑（returncode=%d），無法播放", result.returncode)
             return
         if path.endswith(".wav"):
             win_path_esc = win_path.replace("'", "''")
@@ -98,12 +128,20 @@ def _play_file_sync(path: str, player: str = "auto") -> None:
         logger.warning("tts: 無可用播放器")
         return
 
-    player_label = "powershell" if use_powershell else player
+    player_label = "powershell" if use_powershell else (cmd[0] if cmd else player)
     try:
+        global _current_proc
         logger.info(f"tts play start: {Path(path).name}  player={player_label}")
         _t0 = __import__("time").perf_counter()
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        proc.wait()
+        with _proc_lock:
+            _current_proc = proc
+        try:
+            proc.wait()
+        finally:
+            with _proc_lock:
+                if _current_proc is proc:
+                    _current_proc = None
         logger.info(f"tts play end: {Path(path).name}  elapsed={__import__('time').perf_counter() - _t0:.2f}s")
     except Exception as e:
         logger.warning(f"tts 播放失敗：{e}")

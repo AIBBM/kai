@@ -36,6 +36,7 @@ class StreamingMixin(_MixinBase):
         stream_msg: AIMessage | None = None
         buf: list[str] = []
 
+        self._last_send_text = original_text or text
         agent._cancelled = False
         if not ephemeral:
             self._resumed_from = None
@@ -138,11 +139,9 @@ class StreamingMixin(_MixinBase):
                 # TTS：整段回覆完成後在獨立執行緒播放，完全隔離 Textual event loop
                 _tts_cfg = getattr(agent, "_tts_config", None)
                 if _tts_cfg and _display and not ephemeral:
-                    from core.tts import speak
+                    from core.tts import cancel_current as _tts_cancel, get_tts_loop, speak
                     from loguru import logger as _log
-                    _prev = getattr(self, "_tts_future", None)
-                    if _prev and not _prev.done():
-                        _prev.cancel()
+                    _tts_cancel()  # 終止上一段語音（如正在播放）
                     _engine = _tts_cfg.get("engine", "edge-tts")
                     _log.debug(f"tts: schedule engine={_engine} chars={len(_display)}")
                     _tts_kw = dict(
@@ -154,8 +153,8 @@ class StreamingMixin(_MixinBase):
                         port=int(_tts_cfg.get("port", 8886)),
                         speed=float(_tts_cfg.get("speed", 1.0)),
                     )
-                    self._tts_future = asyncio.get_event_loop().run_in_executor(
-                        None, lambda: asyncio.run(speak(_display, **_tts_kw))
+                    self._tts_future = asyncio.run_coroutine_threadsafe(
+                        speak(_display, **_tts_kw), get_tts_loop()
                     )
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
@@ -277,6 +276,11 @@ class StreamingMixin(_MixinBase):
             prompt.disabled = False
             prompt.placeholder = f"傳訊息給 {agent.display_name}..."
             prompt.focus()
+            if getattr(self, "_restore_input", False):
+                self._restore_input = False
+                restored = getattr(self, "_last_send_text", "")
+                prompt.value = restored
+                prompt.cursor_position = len(restored)
             if ephemeral and _history_snapshot is not None:
                 new_msgs = agent.history[len(_history_snapshot):]
                 self._last_ephemeral = new_msgs if new_msgs else None

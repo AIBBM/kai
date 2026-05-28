@@ -77,8 +77,10 @@ async def _call_backend(design_model: str, messages: list[dict]) -> str:
             api_key=_cfg.GEMINI_API_KEY,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         )
-    else:
+    elif profile.backend == "deepseek":
         client = AsyncOpenAI(api_key=_cfg.DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    else:
+        raise ValueError(f"未知 backend：{profile.backend!r}，請確認 REGISTRY 設定")
     resp = await client.chat.completions.create(model=profile.name, messages=messages)
     return resp.choices[0].message.content or ""
 
@@ -91,7 +93,10 @@ async def call_full_design(description: str) -> dict[str, Any]:
     model_list = ", ".join(REGISTRY.keys())
     prompt = DESIGN_FULL_PROMPT.format(description=description, models=model_list)
     raw = await _call_backend(design_model, [{"role": "user", "content": prompt}])
-    return extract_json(raw)
+    try:
+        return extract_json(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"設計模型回傳非 JSON 格式：{e}\n原始回覆：{raw[:300]}") from e
 
 
 async def call_design_model(name: str, description: str) -> tuple[str, str]:
@@ -100,7 +105,10 @@ async def call_design_model(name: str, description: str) -> tuple[str, str]:
     design_model = _cfg.CREATE_AGENT_MODEL or _cfg.MODEL
     prompt = DESIGN_SYSTEM_PROMPT.format(name=name, description=description or name)
     raw = await _call_backend(design_model, [{"role": "user", "content": prompt}])
-    data = extract_json(raw)
+    try:
+        data = extract_json(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"設計模型回傳非 JSON 格式：{e}\n原始回覆：{raw[:300]}") from e
     return data.get("system_prompt", ""), data.get("greeting", "")
 
 

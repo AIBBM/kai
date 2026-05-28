@@ -121,7 +121,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         Binding("ctrl+t", "toggle_file_tree", "檔案樹"),
         Binding("ctrl+b", "toggle_sidebar", "側邊欄"),
         Binding("ctrl+w", "close_tab", "關閉標籤", priority=True),
-        Binding("escape", "cancel_stream", "取消"),
+        Binding("escape", "cancel_stream", "取消", priority=True),
     ]
 
     SLASH_COMMANDS: list[tuple[str, str]] = []
@@ -919,14 +919,30 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             return self.query_one("#messages", VerticalScroll)
 
     def action_cancel_stream(self) -> None:
-        self.agent._cancelled = True
-        if self._bash_proc and self._bash_proc.returncode is None:
+        from widgets.input import HistoryInput
+        prompt = self.query_one("#prompt", HistoryInput)
+        if prompt.disabled:
+            # 正在串流：取消並標記回填
+            self._restore_input = True
+            self.agent._cancelled = True
+            if self._bash_proc and self._bash_proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(self._bash_proc.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            if self._bash_worker and self._bash_worker.is_running:
+                self._bash_worker.cancel()
+        else:
+            # 未串流：清除樹多選 or 聚焦輸入框
             try:
-                os.killpg(os.getpgid(self._bash_proc.pid), signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        if self._bash_worker and self._bash_worker.is_running:
-            self._bash_worker.cancel()
+                from widgets.tree import FileTree
+                ft = self.query_one("#file-tree", FileTree)
+                if ft._multi_selected:
+                    ft.clear_multi_select()
+                else:
+                    prompt.focus()
+            except Exception:
+                prompt.focus()
 
 
 if __name__ == "__main__":
