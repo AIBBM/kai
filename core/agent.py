@@ -331,7 +331,7 @@ class Agent:
             f"對話歷史：\n\n{conversation}"
         )
 
-        _compact_model = "deepseek-v4-flash" if not self._gemini and self._deepseek else "gemini-2.0-flash"
+        _compact_model = "deepseek-v4-flash" if not self._gemini and self._deepseek else "gemini-2.5-flash"
         resp = await _compact_client.chat.completions.create(
             model=_compact_model,
             messages=[{"role": "user", "content": prompt}],
