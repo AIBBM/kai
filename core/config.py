@@ -58,6 +58,36 @@ def ensure_kai_dir() -> Path:
     return d
 
 
+def reload_env() -> None:
+    """重新讀取 .env 並更新 module globals（支援 /reload-config 熱套用 .env 變更）。
+    API key 類（GEMINI_API_KEY 等）同樣更新，讓 key 輪換不需重啟。
+    """
+    load_dotenv(override=True)
+    g = globals()
+    g["MODEL"]                = os.getenv("MODEL", "qwen3-vl:4b")
+    g["CREATE_AGENT_MODEL"]   = os.getenv("CREATE_AGENT_MODEL", "")
+    g["SEARXNG_URL"]          = os.getenv("SEARXNG_URL", "http://localhost:8888/search")
+    g["NUM_CTX"]              = int(os.getenv("NUM_CTX", "0"))
+    g["MAX_TOOL_CALLS"]       = int(os.getenv("MAX_TOOL_CALLS", "15"))
+    g["MAX_SEARCH_CHARS"]     = int(os.getenv("MAX_SEARCH_CHARS", "8000"))
+    g["SEARCH_NUM_RESULTS"]   = int(os.getenv("SEARCH_NUM_RESULTS", "5"))
+    g["SEARCH_TIMEOUT"]       = float(os.getenv("SEARCH_TIMEOUT", "8.0"))
+    g["SEARCH_RETRIES"]       = int(os.getenv("SEARCH_RETRIES", "2"))
+    g["HISTORY_KEEP"]         = int(os.getenv("HISTORY_KEEP", "10"))
+    g["USERNAME"]             = os.getenv("USERNAME", "你")
+    g["BASH_TIMEOUT"]         = int(os.getenv("BASH_TIMEOUT", "30"))
+    g["TEMPERATURE"]          = float(os.getenv("TEMPERATURE", "0.6"))
+    g["TOP_K"]                = int(os.getenv("TOP_K", "20"))
+    g["TOP_P"]                = float(os.getenv("TOP_P", "0.95"))
+    g["FETCH_MAX_CHARS"]      = int(os.getenv("FETCH_MAX_CHARS", "12000"))
+    g["OLLAMA_STREAM_TIMEOUT"]= int(os.getenv("OLLAMA_STREAM_TIMEOUT", "120"))
+    g["MCP_TOOL_TIMEOUT"]     = float(os.getenv("MCP_TOOL_TIMEOUT", "60.0"))
+    g["DEBUG_TOOLS"]          = os.getenv("DEBUG_TOOLS", "0").strip().lower() in ("1", "true", "yes")
+    g["GEMINI_API_KEY"]       = os.getenv("GEMINI_API_KEY", "")
+    g["DEEPSEEK_API_KEY"]     = os.getenv("DEEPSEEK_API_KEY", "")
+    g["JINA_API_KEY"]         = os.getenv("JINA_API_KEY", "")
+
+
 def load_kai_config() -> dict:
     """讀取 ~/.kai/config.json（全域）+ cwd/.kai/config.json（專案），shallow merge。
     專案設定優先；兩者皆不存在時回傳 {}。

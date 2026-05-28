@@ -13,7 +13,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import Static, TabbedContent
 
 from core.agent import Agent
-from core.config import _normalize, apply_kai_config, current_kai_config, ensure_kai_dir, get_nickname, load_kai_config
+from core.config import _normalize, apply_kai_config, current_kai_config, ensure_kai_dir, get_nickname, load_kai_config, reload_env
 from core.models import REGISTRY
 from widgets.input import HistoryInput
 from widgets.sidebar import Sidebar
@@ -56,7 +56,8 @@ class SessionMixin(_MixinBase):
         self.notify(f"✅ {model} 暱稱設為「{arg}」", timeout=3)
 
     def _apply_project_config(self) -> None:
-        """重新讀取 .kai/config.json 並套用所有設定到 agent 和 UI。"""
+        """重新讀取 .env + .kai/config.json 並套用所有設定到 agent 和 UI。"""
+        reload_env()
         cfg = load_kai_config()
         apply_kai_config(cfg)
         if "history_keep" in cfg:
