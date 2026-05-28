@@ -21,8 +21,11 @@ uv run ruff format .
 # Run tests
 uv run pytest tests/
 
-# Start SearXNG + Valkey
-bash searxng/start.sh
+# Start SearXNG + Valkey (default)
+docker compose up -d
+
+# Start all services (TTS + DB included)
+docker compose --profile tts --profile db up -d
 ```
 
 ## Architecture
@@ -44,11 +47,12 @@ core/
   file_picker.py    → prompt_toolkit file browser (used by main.py /image)
   tool_log.py       → tool call debug log (append to .kai/tool_calls.log, only when DEBUG_TOOLS=1)
 mixins/             → ChatApp behaviour split into focused mixins (all inherit _MixinBase = ChatApp)
-  agents.py         → AgentsMixin: /create-agent, /load-agent, /list-agents, /reload-agent
+  agents.py         → AgentsMixin: /create-agent, /load-agent, /list-agents, /reload-agent, /delete-agent
+  app_tools.py      → AppToolsMixin: 17 AI-callable app tools (load/create/delete agent, model switch, TTS, MCP…)
   bash.py           → BashMixin: ! command execution
   mcp.py            → MCPMixin: /mcp-list, /mcp-reload, /mcp-add, /mcp-del
   session.py        → SessionMixin: /cd, /compact, /cls, /resume, /model, /rename, /nickname, /reload-config, /init-config
-  streaming.py      → StreamingMixin: _send worker, on_token, on_done, TTS playback
+  streaming.py      → StreamingMixin: _send worker, on_token, on_done, TTS playback (run_in_executor thread)
 widgets/
   input.py          → HistoryInput, ChatAutoComplete
   tree.py           → RightClickTree, TreeContextMenu, FileTree
@@ -120,13 +124,14 @@ widgets/
 | `/mcp-reload` | Restart MCP servers without quitting the app |
 | `/mcp-add <name> <cmd> [args...]` | Add a new MCP server to `mcp_servers.json` |
 | `/mcp-del <name>` | Remove an MCP server from `mcp_servers.json` |
-| `/create-agent <description>` | Use AI to design a new agent config in `agents/` |
-| `/load-agent <name>` | Load an agent config and spawn a new tab |
+| `/create-agent <description>` | Use AI (CREATE_AGENT_MODEL) to design a new agent config in `agents/` |
+| `/load-agent <name>` | Load an agent config and spawn a new tab (dedup: switches to existing tab if already open) |
 | `/list-agents` | Show all agents in `agents/` (AgentsScreen picker) |
-| `/reload-agent` | Re-read `config.json` and hot-swap system prompt in running agent (no tab reload needed) |
+| `/delete-agent [name]` | Delete agent(s); omit name to open multi-select panel |
+| `/reload-agent` | Re-read `config.json` and hot-swap system prompt, model, nickname, tts in running agent |
 | `/reload-config` | Re-read `.kai/config.json` and apply all settings to the running process |
 | `/init-config` | Open interactive ConfigScreen: select keys, L→`cwd/.kai/config.json`, G→`~/.kai/config.json` |
-| `/tts <engine\|off>` | Switch TTS engine or disable: `edge-tts`, `melotts`, `kokoro-api`, `kokoro`, `off` |
+| `/tts <engine\|off>` | Switch TTS engine or disable: `edge-tts`, `melotts`, `kokoro-api`, `kokoro`, `off` (in-memory only; does not persist to config.json) |
 
 ### `!` bash commands
 
@@ -247,15 +252,15 @@ Add one entry to `REGISTRY` in `core/models.py`:
 
 | 模型 | thinking | vision | tools | backend |
 |------|----------|--------|-------|---------|
-| `qwen3-vl:4b` | ✓ | ✓ | ✓ | ollama |
-| `qwen3:4b/8b` | ✓ | - | ✓ | ollama |
-| `qwen3.5:2b` | - | ✓ | ✓ | ollama |
-| `qwen3.5:4b` | ✓ | ✓ | ✓ | ollama |
-| `gemma3:4b` | - | ✓ | ✓ | ollama |
-| `gemma4:e2b/e4b` | ✓ | ✓ | ✓ | ollama |
 | `deepseek-r1:1.5b` | ✓ | - | ✗ | ollama |
-| `MFDoom/deepseek-r1-tool-calling:1.5b` | - | - | ✓ | ollama |
-| `qwen2.5-coder:7b` | - | - | ✗ | ollama |
+| `qwen2.5-coder:3b` | - | - | ✗ | ollama |
+| `qwen3.5:2b` | - | ✓ | ✓ | ollama |
+| `qwen3-vl:4b` | ✓ | ✓ | ✓ | ollama |
+| `qwen3.5:4b` | ✓ | ✓ | ✓ | ollama |
+| `gemma4:e2b` | ✓ | ✓ | ✓ | ollama |
+| `gemma4:e4b` | ✓ | ✓ | ✓ | ollama |
+| `deepseek-v4-flash` | ✓ | - | ✓ | deepseek |
+| `deepseek-v4-pro` | ✓ | - | ✓ | deepseek |
 | `gemini-2.0-flash` | - | ✓ | ✓ | gemini |
 | `gemini-2.5-flash` | ✓ | ✓ | ✓ | gemini |
 | `gemini-2.5-pro` | ✓ | ✓ | ✓ | gemini |
@@ -359,7 +364,8 @@ Two config files control MCP servers:
 
 | File | Scope | Purpose |
 |------|-------|---------|
-| `mcp_servers.json` | kai package dir (global) | MCP servers available to all agents; travels with the kai install, not the project |
+| `~/.kai/mcp_servers.json` | global (user home) | MCP servers available to all agents across all projects |
+| `cwd/.kai/mcp_servers.json` | project-local | project-specific MCP servers; merged with global |
 | `agents/<name>/config.json` `.mcp_servers` | agent-level | extra servers for a specific agent |
 
 Disabled servers use a `_` prefix in `mcp_servers.json` (e.g. `_playwright`, `_twstock-db`). The `_` prefix convention prevents accidental activation — remove it to enable.
@@ -369,13 +375,23 @@ Disabled servers use a `_` prefix in `mcp_servers.json` (e.g. `_playwright`, `_t
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MODEL` | `qwen3-vl:4b` | Active model |
-| `DEBUG_TOOLS` | `0` | Set `1` to enable tool debug cards in UI + append tool calls (name/args/result) to `tool_calls.log` in cwd |
+| `CREATE_AGENT_MODEL` | `""` | Model used for `/create-agent` design step (empty = same as MODEL) |
+| `DEBUG_TOOLS` | `0` | Set `1` to enable tool debug cards in UI + append to `tool_calls.log` |
 | `NUM_CTX` | `0` | Context window override (0 = model default) |
 | `MAX_TOOL_CALLS` | `15` | Max tool calls per turn |
 | `TEMPERATURE` | `0.6` | Generation temperature |
+| `TOP_K` | `20` | Top-k sampling (0 = disable) |
+| `TOP_P` | `0.95` | Nucleus sampling |
 | `USERNAME` | `你` | Display name in chat bubbles and prompt title |
+| `HISTORY_KEEP` | `10` | Default history pairs to keep (agent config overrides per-agent) |
 | `BASH_TIMEOUT` | `30` | `bash_exec` default timeout (seconds) |
+| `OLLAMA_STREAM_TIMEOUT` | `120` | Seconds before Ollama stream declared stuck |
 | `SEARXNG_URL` | `http://localhost:8888/search` | SearXNG API endpoint |
+| `SEARCH_NUM_RESULTS` | `5` | Number of search results to return |
+| `MAX_SEARCH_CHARS` | `8000` | Max characters per search result |
+| `FETCH_MAX_CHARS` | `12000` | Max characters returned by `fetch_url` |
+| `GEMINI_API_KEY` | — | Google Gemini API key |
+| `DEEPSEEK_API_KEY` | — | DeepSeek API key |
 | `CONTEXT7_API_KEY` | — | Context7 MCP API key |
 
 Config priority (highest → lowest): `cwd/.kai/config.json` > `~/.kai/config.json` > `.env` > code defaults. Use `/init-config` to export current values and `/reload-config` to hot-apply changes. Only put API keys in `.env`; all other tuning belongs in `.kai/config.json`. Change hardcoded defaults in `core/config.py`; per-model context windows in `core/models.py`.
