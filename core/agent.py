@@ -393,7 +393,7 @@ class Agent:
         self._t_thinking_end: float | None = None
         tool_call_count = 0
         _tool_call_log: list[str] = []  # 記錄本輪所有工具呼叫，hit 上限時寫入進度摘要
-        log_turn_start(len(self.history))
+        log_turn_start(len(self.history), self._agent_dir)
         while True:
             reply_parts: list[str] = []
             tool_calls: list = []
@@ -512,7 +512,7 @@ class Agent:
             for tc, (fn_name, result) in zip(tool_calls, results):
                 raw = getattr(tc.function, "arguments", {})
                 args = json.loads(raw) if isinstance(raw, str) else dict(raw)
-                log_tool_call(fn_name, args, result)
+                log_tool_call(fn_name, args, result, self._agent_dir)
                 if on_tool_call:
                     await on_tool_call(fn_name, args, result)
             for _fn, _ in results:

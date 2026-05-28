@@ -15,29 +15,28 @@ from pathlib import Path
 
 from .config import DEBUG_TOOLS
 
-_LOG_FILE = ".kai/tool_calls.log"
 _MAX_RESULT = 2000
 _SEPARATOR = "─" * 64
 
 _call_counter: int = 0
-_session_written: bool = False
+_session_written: set[Path] = set()  # 每個 log 檔各自記是否已寫過 header
 
 
-def _log_path() -> Path:
-    """動態取得目前 cwd 下的 log 路徑，跟著 /cd 變。"""
-    return Path(_LOG_FILE)
+def _log_path(agent_dir: "Path | None") -> Path:
+    """決定 log 路徑：subagent → agent_dir/tool_calls.log；main chat → cwd/.kai/tool_calls.log。"""
+    if agent_dir is not None:
+        return agent_dir / "tool_calls.log"
+    return Path(".kai/tool_calls.log")
 
 
-def _write_session_header() -> None:
-    """每次 process 啟動後第一次寫 log 時，插入 session 分隔線。"""
-    global _session_written
-    if _session_written:
+def _write_session_header(p: Path) -> None:
+    """每個 log 檔在 process 生命週期內只寫一次 session 分隔線。"""
+    if p in _session_written:
         return
-    _session_written = True
+    _session_written.add(p)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = f"\n{'═' * 64}\n  SESSION START  {ts}\n{'═' * 64}\n"
     try:
-        p = _log_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
             f.write(header)
@@ -45,26 +44,28 @@ def _write_session_header() -> None:
         pass
 
 
-def log_turn_start(turn: int) -> None:
+def log_turn_start(turn: int, agent_dir: "Path | None" = None) -> None:
     """記錄新的對話輪次開始（chat() 被呼叫）。"""
     if not DEBUG_TOOLS:
         return
-    _write_session_header()
+    p = _log_path(agent_dir)
+    _write_session_header(p)
     ts = datetime.now().strftime("%H:%M:%S")
     try:
-        with _log_path().open("a", encoding="utf-8") as f:
+        with p.open("a", encoding="utf-8") as f:
             f.write(f"\n▶ Turn #{turn}  [{ts}]\n")
     except Exception:
         pass
 
 
-def log_tool_call(tool_name: str, args: dict, result: str) -> None:
+def log_tool_call(tool_name: str, args: dict, result: str, agent_dir: "Path | None" = None) -> None:
     """記錄單次 tool call 的名稱、參數、回應。DEBUG_TOOLS=0 時直接返回。"""
     if not DEBUG_TOOLS:
         return
     global _call_counter
     _call_counter += 1
 
+    p = _log_path(agent_dir)
     ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     args_str = json.dumps(args, ensure_ascii=False, indent=2)
     if len(result) > _MAX_RESULT:
@@ -79,7 +80,7 @@ def log_tool_call(tool_name: str, args: dict, result: str) -> None:
         f"{_SEPARATOR}\n"
     )
     try:
-        with _log_path().open("a", encoding="utf-8") as f:
+        with p.open("a", encoding="utf-8") as f:
             f.write(block)
     except Exception:
         pass
