@@ -26,6 +26,7 @@ from textual.widgets import (
 )
 
 from core.agent import Agent
+from core.app_state import InputState, SessionState, TabState, UIState
 import core.config as _kai_cfg
 from core.config import USERNAME, apply_kai_config, ensure_kai_dir, load_kai_config
 from core.mcp_client import MCPClient, load_mcp_servers
@@ -138,31 +139,17 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         self.agent = Agent(model=_kai_cfg.MODEL)
         self._inject_app_tools(self.agent)
         self.scroll_sensitivity_y = 5.0
-        self._spin_idx = 0
-        self._spin_label = "生成中"
         self._at_mention_re = re.compile(r'(?:(?<=\s)|^)@(\S+)')
-        self._debug_tools = _kai_cfg.DEBUG_TOOLS
-        self._think_override: bool | None = None
-        self._input_history: list[str] = _load_prompt_history()
-        self._history_idx: int = -1
-        self._history_draft: str = ""
         self._mcp_task: asyncio.Task | None = None
         self._mcp_done: asyncio.Event | None = None
-        self._prev_cwd: str = os.getcwd()
         self._open_file_tabs: dict[str, Path] = {}
-        self._file_tab_counter = 0
         self._last_file_copy: dict | None = None
         self._bash_proc: asyncio.subprocess.Process | None = None
         self._bash_worker: "Worker | None" = None  # type: ignore[name-defined]
-        self._resumed_from: Path | None = None  # 目前 tab 的 resume 歸檔路徑，有新訊息後清除
-        self._tab_resumed_from: dict[str, Path | None] = {}  # tab_id → resumed_from（切 tab 時還原）
-        self._session_name: str = ""            # 目前 session 的自訂名稱，/rename 設定
-        self._tab_session_names: dict[str, str] = {}  # tab_id → session name（切 tab 時還原）
-        self._last_ephemeral: list[dict] | None = None  # /ask 最後一輪的問答，/save 用
-        self._agent_tabs: dict[str, Agent] = {}  # tab_id → Agent（agent factory 建立的 tabs）
-        self._main_agent: Agent | None = None    # chat tab 的主 agent（切回 chat 時還原）
-        self._pending_open_agent: str | None = None  # open_agent 工具排程，_send finally 執行
-        self._tts_task: "asyncio.Task | None" = None  # 目前播放中的 TTS task，新回覆時取消舊的
+        self.session = SessionState(prev_cwd=os.getcwd())
+        self.input_state = InputState(history=_load_prompt_history())
+        self.ui_state = UIState(debug_tools=_kai_cfg.DEBUG_TOOLS)
+        self.tab_state = TabState()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -196,7 +183,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
     def on_mount(self) -> None:
         self.title = "kai"
         self.sub_title = _kai_cfg.MODEL
-        self._main_agent = self.agent  # 記住主 chat agent，切回 chat tab 時還原
+        self.tab_state.main_agent = self.agent  # 記住主 chat agent，切回 chat tab 時還原
         # 讓主 chat AI 能呼叫 open_agent 工具開啟副 agent tab
         _app = self
 
@@ -210,7 +197,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
                     f"找不到符合「{query}」的 agent。"
                     f"請從以下名稱中選擇一個，再呼叫 open_agent：{names}"
                 )
-            _app._pending_open_agent = dir_name
+            _app.tab_state.pending_open_agent = dir_name
             return f"✅ 找到 agent：{dir_name}，正在開啟..."
 
         self.agent.tools_map["open_agent"] = _open_agent_tool
@@ -220,8 +207,8 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         if _state.exists():
             _arch = _state.parent / _state.read_text(encoding="utf-8").strip()
             if _arch.exists():
-                self._resumed_from = _arch
-                self._tab_resumed_from["chat"] = _arch
+                self.session.resumed_from = _arch
+                self.session.tab_resumed_from["chat"] = _arch
                 self._load_session_name_from_archive(_arch)
         # 還原 /rename 命名（優先於歸檔名稱）
         _name_file = _hist_dir / ".current_name"
@@ -229,8 +216,8 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             try:
                 _saved_name = _name_file.read_text(encoding="utf-8").strip()
                 if _saved_name:
-                    self._session_name = _saved_name
-                    self._tab_session_names["chat"] = _saved_name
+                    self.session.name = _saved_name
+                    self.session.tab_names["chat"] = _saved_name
                     self._update_subtitle()
             except Exception:
                 pass
@@ -350,7 +337,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             self.agent.mcp_client = mcp
             self.agent.mcp_context = ctx
             self.agent._rebuild_system_prompt()
-            for _a in self._agent_tabs.values():
+            for _a in self.tab_state.agent_tabs.values():
                 _a.mcp_client = mcp
                 _a.mcp_context = ctx
                 _a._rebuild_system_prompt()
@@ -362,7 +349,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             pass
         finally:
             self.agent.mcp_client = None
-            for _a in self._agent_tabs.values():
+            for _a in self.tab_state.agent_tabs.values():
                 _a.mcp_client = None
             await mcp.stop()
 
@@ -399,12 +386,12 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         ac = self.query_one(ChatAutoComplete)
         if ac.display:
             return
-        if not self._input_history:
+        if not self.input_state.history:
             return
-        if self._history_idx == -1:
-            self._history_draft = prompt.value
-        self._history_idx = min(self._history_idx + 1, len(self._input_history) - 1)
-        prompt.value = self._input_history[-(self._history_idx + 1)]
+        if self.input_state.history_idx == -1:
+            self.input_state.history_draft = prompt.value
+        self.input_state.history_idx = min(self.input_state.history_idx + 1, len(self.input_state.history) - 1)
+        prompt.value = self.input_state.history[-(self.input_state.history_idx + 1)]
         prompt.cursor_position = len(prompt.value)
 
     def action_history_next(self) -> None:
@@ -414,13 +401,13 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         ac = self.query_one(ChatAutoComplete)
         if ac.display:
             return
-        if self._history_idx == -1:
+        if self.input_state.history_idx == -1:
             return
-        self._history_idx -= 1
-        if self._history_idx == -1:
-            prompt.value = self._history_draft
+        self.input_state.history_idx -= 1
+        if self.input_state.history_idx == -1:
+            prompt.value = self.input_state.history_draft
         else:
-            prompt.value = self._input_history[-(self._history_idx + 1)]
+            prompt.value = self.input_state.history[-(self.input_state.history_idx + 1)]
         prompt.cursor_position = len(prompt.value)
 
     @on(events.Click, "#attach-btn")
@@ -480,11 +467,11 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         if not text:
             return
         event.input.clear()
-        if not self._input_history or self._input_history[-1] != text:
-            self._input_history.append(text)
+        if not self.input_state.history or self.input_state.history[-1] != text:
+            self.input_state.history.append(text)
             _append_prompt_history(text)
-        self._history_idx = -1
-        self._history_draft = ""
+        self.input_state.history_idx = -1
+        self.input_state.history_draft = ""
 
         if text.startswith("!"):
             cmd = text[1:].strip()
@@ -502,12 +489,12 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
                 else:
                     self._send(arg, ephemeral=True)
             elif cmd == "/save":
-                if not self._last_ephemeral:
+                if not self.input_state.last_ephemeral:
                     self.notify("沒有可保存的 /ask 回答", severity="warning")
                 else:
-                    self.agent.history.extend(self._last_ephemeral)
+                    self.agent.history.extend(self.input_state.last_ephemeral)
                     self.agent.save_history()
-                    self._last_ephemeral = None
+                    self.input_state.last_ephemeral = None
                     self.notify("已存入對話歷史", timeout=2)
             elif cmd == "/clear":
                 await self.action_clear_screen()
@@ -538,8 +525,8 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             elif cmd == "/model":
                 self.notify("用法：/model <模型名稱>", severity="warning")
             elif cmd == "/debug":
-                self._debug_tools = not self._debug_tools
-                label = "🔧 開啟" if self._debug_tools else "關閉"
+                self.ui_state.debug_tools = not self.ui_state.debug_tools
+                label = "🔧 開啟" if self.ui_state.debug_tools else "關閉"
                 self.notify(f"工具除錯模式：{label}", severity="information", timeout=3)
                 self._update_prompt_title()
             elif cmd == "/think":
@@ -715,7 +702,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
 
     def _update_prompt_title(self) -> None:
         base = f"[bold]{USERNAME}[/bold] [dim]❯[/dim]"
-        suffix = "  [dim]🔧 debug[/dim]" if self._debug_tools else ""
+        suffix = "  [dim]🔧 debug[/dim]" if self.ui_state.debug_tools else ""
         self.query_one("#prompt", HistoryInput).border_title = base + suffix
 
     def _do_tts_switch(self, arg: str) -> None:
@@ -747,8 +734,8 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         self.notify(f"TTS 切換為：{engine}  voice={cfg['voice']}", timeout=3)
 
     def _thinking_active(self) -> bool:
-        if self._think_override is not None:
-            return self._think_override
+        if self.ui_state.think_override is not None:
+            return self.ui_state.think_override
         return self.agent.profile.supports_thinking
 
     def _sync_cap_bar(self) -> None:
@@ -769,9 +756,9 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
 
     def action_toggle_think(self) -> None:
         current = self._thinking_active()
-        self._think_override = not current
+        self.ui_state.think_override = not current
         self._sync_cap_bar()
-        label = "開啟 💡" if self._think_override else "關閉"
+        label = "開啟 💡" if self.ui_state.think_override else "關閉"
         self.notify(f"Thinking：{label}", severity="information", timeout=2)
 
     def action_toggle_file_tree(self) -> None:
@@ -800,27 +787,27 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         if not tab_id:
             return
         sidebar = self.query_one("#sidebar", Sidebar)
-        if tab_id in self._agent_tabs:
-            self.agent = self._agent_tabs[tab_id]
+        if tab_id in self.tab_state.agent_tabs:
+            self.agent = self.tab_state.agent_tabs[tab_id]
             prompt = self.query_one("#prompt", HistoryInput)
             prompt.placeholder = f"傳訊息給 {self.agent.display_name}..."
             sidebar.set_model(self.agent.profile.name)
             mcp_sum = self.agent.mcp_client.server_summary if self.agent.mcp_client else {}
             sidebar.set_mcp(mcp_sum)
-            self._resumed_from = self._tab_resumed_from.get(tab_id, None)
-            self._session_name = self._tab_session_names.get(tab_id, "")
+            self.session.resumed_from = self.session.tab_resumed_from.get(tab_id, None)
+            self.session.name = self.session.tab_names.get(tab_id, "")
             self._update_subtitle()
             self._sync_cap_bar()
         elif tab_id == "chat":
-            if self._main_agent is not None:
-                self.agent = self._main_agent
+            if self.tab_state.main_agent is not None:
+                self.agent = self.tab_state.main_agent
                 prompt = self.query_one("#prompt", HistoryInput)
                 prompt.placeholder = f"傳訊息給 {self.agent.display_name}..."
                 sidebar.set_model(self.agent.profile.name)
                 mcp_sum = self.agent.mcp_client.server_summary if self.agent.mcp_client else {}
                 sidebar.set_mcp(mcp_sum)
-                self._resumed_from = self._tab_resumed_from.get("chat", None)
-                self._session_name = self._tab_session_names.get("chat", "")
+                self.session.resumed_from = self.session.tab_resumed_from.get("chat", None)
+                self.session.name = self.session.tab_names.get("chat", "")
                 self._update_subtitle()
                 self._sync_cap_bar()
 
@@ -841,8 +828,8 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             if p == path:
                 tc.active = tid
                 return
-        self._file_tab_counter += 1
-        tab_id = f"ft-{self._file_tab_counter}"
+        self.tab_state.file_tab_counter += 1
+        tab_id = f"ft-{self.tab_state.file_tab_counter}"
         try:
             content = await asyncio.to_thread(
                 path.read_text, encoding="utf-8", errors="replace"
@@ -888,7 +875,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         except Exception:
             pass
         self._open_file_tabs.pop(tab_id, None)
-        self._agent_tabs.pop(tab_id, None)
+        self.tab_state.agent_tabs.pop(tab_id, None)
         await self.query_one("#center-tabs", TabbedContent).remove_pane(tab_id)
 
     def action_toggle_sidebar(self) -> None:
@@ -902,7 +889,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         把 subagent 的回覆送到 main chat。
         """
         # subagent：直接找對應 tab 的 VerticalScroll
-        for tab_id, agent in self._agent_tabs.items():
+        for tab_id, agent in self.tab_state.agent_tabs.items():
             if agent is self.agent:
                 try:
                     return self.query_one(f"TabPane#{tab_id}", TabPane).query_one(VerticalScroll)
@@ -911,7 +898,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         # main agent 或找不到 agent tab：用 tc.active 決定
         tc = self.query_one("#center-tabs", TabbedContent)
         active = tc.active
-        if active == "chat" or active not in self._agent_tabs:
+        if active == "chat" or active not in self.tab_state.agent_tabs:
             return self.query_one("#messages", VerticalScroll)
         try:
             return self.query_one(f"TabPane#{active}", TabPane).query_one(VerticalScroll)
@@ -923,7 +910,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         prompt = self.query_one("#prompt", HistoryInput)
         if prompt.disabled:
             # 正在串流：取消並標記回填
-            self._restore_input = True
+            self.input_state.restore_input = True
             self.agent._cancelled = True
             if self._bash_proc and self._bash_proc.returncode is None:
                 try:
