@@ -332,6 +332,14 @@ class ChatAutoComplete(AutoComplete):
         self.absolute_offset = Offset(max(0, x - 1), max(0, y - h))
 
     def post_completion(self) -> None:
+        text = self._target_state.text
+        # /cd 與 !cd：選取中間目錄後直接關閉，讓使用者可按 Enter 確認，不強制選到最末層
+        _is_cd = text.startswith("/cd ") or (
+            text.startswith("!") and text.lstrip("!").lstrip().startswith("cd ")
+        )
+        if _is_cd:
+            self.action_hide()
+            return
         if self.target.value.endswith("/"):
             return
         self.action_hide()

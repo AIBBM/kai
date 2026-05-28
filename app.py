@@ -906,7 +906,11 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             return self.query_one("#messages", VerticalScroll)
 
     def action_cancel_stream(self) -> None:
-        from widgets.input import HistoryInput
+        from widgets.input import ChatAutoComplete, HistoryInput
+        ac = self.query_one(ChatAutoComplete)
+        if ac.display:
+            ac.action_hide()
+            return
         prompt = self.query_one("#prompt", HistoryInput)
         if prompt.disabled:
             # 正在串流：取消並標記回填
