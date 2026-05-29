@@ -116,12 +116,14 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
     COMMANDS = App.COMMANDS | {ChatCommands}
 
     BINDINGS = [
-        Binding("ctrl+q", "quit", "退出"),
+        Binding("ctrl+q", "quit", "退出", priority=True),
         Binding("ctrl+p", "command_palette", "命令"),
         Binding("ctrl+l", "clear_screen", "清除畫面"),
         Binding("ctrl+t", "toggle_file_tree", "檔案樹"),
         Binding("ctrl+b", "toggle_sidebar", "側邊欄"),
         Binding("ctrl+w", "close_tab", "關閉標籤", priority=True),
+        Binding("ctrl+shift+left",  "move_tab_left",  "Tab 左移", priority=True, show=False),
+        Binding("ctrl+shift+right", "move_tab_right", "Tab 右移", priority=True, show=False),
         Binding("escape", "cancel_stream", "取消", priority=True),
     ]
 
@@ -850,6 +852,49 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         await tc.add_pane(TabPane(f"{path.name} ×", ta, id=tab_id))
         tc.active = tab_id
 
+    def _move_active_tab(self, direction: int) -> None:
+        """將目前 active tab 往左（-1）或右（+1）移動一格，Chat tab 不可移動。"""
+        from textual.widgets._content_switcher import ContentSwitcher
+        from textual.widgets._tabbed_content import ContentTab, ContentTabs
+        tc = self.query_one("#center-tabs", TabbedContent)
+        active_id = tc.active
+        if not active_id or active_id == "chat":
+            return
+        try:
+            content_tabs = tc.get_child_by_type(ContentTabs)
+            tabs_list = content_tabs.query_one("#tabs-list")
+            tabs = list(tabs_list.query("Tab").results())
+            cur = next((i for i, t in enumerate(tabs) if t.id == ContentTab.add_prefix(active_id)), None)
+            if cur is None:
+                return
+            tgt = cur + direction
+            if tgt < 0 or tgt >= len(tabs):
+                return
+            if ContentTab.sans_prefix(tabs[tgt].id or "") == "chat":
+                return
+            if direction == -1:
+                tabs_list.move_child(tabs[cur], before=tabs[tgt])
+            else:
+                tabs_list.move_child(tabs[cur], after=tabs[tgt])
+            switcher = tc.get_child_by_type(ContentSwitcher)
+            panes = list(switcher.children)
+            pi = next((i for i, p in enumerate(panes) if p.id == active_id), None)
+            if pi is not None:
+                ni = pi + direction
+                if 0 <= ni < len(panes):
+                    if direction == -1:
+                        switcher.move_child(panes[pi], before=panes[ni])
+                    else:
+                        switcher.move_child(panes[pi], after=panes[ni])
+        except Exception:
+            pass
+
+    def action_move_tab_left(self) -> None:
+        self._move_active_tab(-1)
+
+    def action_move_tab_right(self) -> None:
+        self._move_active_tab(1)
+
     async def action_close_tab(self) -> None:
         tc = self.query_one("#center-tabs", TabbedContent)
         active_id = tc.active
@@ -906,7 +951,11 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             return self.query_one("#messages", VerticalScroll)
 
     def action_cancel_stream(self) -> None:
+        from textual.screen import ModalScreen
         from widgets.input import ChatAutoComplete, HistoryInput
+        if isinstance(self.screen, ModalScreen):
+            self.screen.dismiss()
+            return
         ac = self.query_one(ChatAutoComplete)
         if ac.display:
             ac.action_hide()

@@ -168,7 +168,12 @@ class AgentsMixin(_MixinBase):
 
         async def on_done(*_) -> None:
             if stream_msg and buf:
-                await stream_msg.update_content("".join(buf), final=True)
+                _hist = agent.history
+                if _hist and _hist[-1]["role"] == "assistant":
+                    _display = str(_hist[-1]["content"])
+                else:
+                    _display = "".join(buf)
+                await stream_msg.update_content(_display, final=True)
 
         try:
             await agent.chat(
