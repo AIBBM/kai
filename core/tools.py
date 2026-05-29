@@ -236,11 +236,19 @@ async def fetch_urls(urls: list) -> str:
     return "\n\n---\n\n".join(results)
 
 
+_SUDO_NONINTERACTIVE = (
+    # 讓本 shell（及匯出到子 bash）的所有 sudo 呼叫自動帶 -n（非互動）旗標。
+    # sudo -n：若需密碼立刻失敗並顯示清楚錯誤，不再掛 30 秒等待 /dev/tty 輸入。
+    r'sudo(){ command sudo -n "$@"; }; export -f sudo 2>/dev/null; '
+)
+
+
 async def bash_exec(command: str, timeout: int = 0) -> str:
     """執行 bash 指令，回傳 stdout + stderr。
 
     使用 proc.wait() 而非 communicate()，只等 shell 本身退出。
     讀取用獨立 task，shell 退出後立即 cancel，避免背景程序繼承 pipe 導致 deadlock。
+    stdin=DEVNULL：防止指令（含 sudo）嘗試從終端讀取密碼而卡住。
     """
     t = timeout or _cfg.BASH_TIMEOUT
 
@@ -252,10 +260,11 @@ async def bash_exec(command: str, timeout: int = 0) -> str:
             pass
 
     try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
+        proc = await asyncio.create_subprocess_exec(
+            "/bin/bash", "-c", _SUDO_NONINTERACTIVE + command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
         )
         out_chunks: list[bytes] = []
         err_chunks: list[bytes] = []
