@@ -13,7 +13,6 @@ from tenacity import (
 )
 
 from . import config as _cfg
-from .config import JINA_API_KEY
 
 OPEN_AGENT_TOOL = {
     "type": "function",
@@ -194,8 +193,8 @@ async def web_search(query: str, num_results: int = _cfg.SEARCH_NUM_RESULTS) -> 
 
 def _jina_headers() -> dict:
     h = {"Accept": "application/json"}
-    if JINA_API_KEY:
-        h["Authorization"] = f"Bearer {JINA_API_KEY}"
+    if _cfg.JINA_API_KEY:
+        h["Authorization"] = f"Bearer {_cfg.JINA_API_KEY}"
     return h
 
 

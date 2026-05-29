@@ -194,7 +194,7 @@ class AgentsMixin(_MixinBase):
             prompt.disabled = False
             if self.agent is agent:
                 self._update_prompt_title()
-                prompt.placeholder = f"傳訊息給 {agent.display_name}..."
+                prompt.reset_prediction(f"傳訊息給 {agent.display_name}...")
                 prompt.focus()
 
     async def _do_reload_agent(self) -> None:

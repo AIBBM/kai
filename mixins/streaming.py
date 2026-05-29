@@ -274,7 +274,7 @@ class StreamingMixin(_MixinBase):
             prompt.remove_class("streaming")
             self._update_prompt_title()
             prompt.disabled = False
-            prompt.placeholder = f"傳訊息給 {agent.display_name}..."
+            prompt.reset_prediction(f"傳訊息給 {agent.display_name}...")
             prompt.focus()
             if self.input_state.restore_input:
                 self.input_state.restore_input = False

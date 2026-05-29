@@ -886,8 +886,8 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
                         switcher.move_child(panes[pi], before=panes[ni])
                     else:
                         switcher.move_child(panes[pi], after=panes[ni])
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.warning(f"move_tab 失敗（tab/pane 可能不同步）：{_e}")
 
     def action_move_tab_left(self) -> None:
         self._move_active_tab(-1)

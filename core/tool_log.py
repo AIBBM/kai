@@ -13,12 +13,12 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from .config import DEBUG_TOOLS
+from . import config as _cfg
 
 _MAX_RESULT = 2000
 _SEPARATOR = "─" * 64
 
-_call_counter: int = 0
+_call_counters: dict[Path, int] = {}  # 每個 log 檔各自的 call counter
 _session_written: set[Path] = set()  # 每個 log 檔各自記是否已寫過 header
 
 
@@ -46,7 +46,7 @@ def _write_session_header(p: Path) -> None:
 
 def log_turn_start(turn: int, agent_dir: "Path | None" = None) -> None:
     """記錄新的對話輪次開始（chat() 被呼叫）。"""
-    if not DEBUG_TOOLS:
+    if not _cfg.DEBUG_TOOLS:
         return
     p = _log_path(agent_dir)
     _write_session_header(p)
@@ -60,12 +60,12 @@ def log_turn_start(turn: int, agent_dir: "Path | None" = None) -> None:
 
 def log_tool_call(tool_name: str, args: dict, result: str, agent_dir: "Path | None" = None) -> None:
     """記錄單次 tool call 的名稱、參數、回應。DEBUG_TOOLS=0 時直接返回。"""
-    if not DEBUG_TOOLS:
+    if not _cfg.DEBUG_TOOLS:
         return
-    global _call_counter
-    _call_counter += 1
-
     p = _log_path(agent_dir)
+    _call_counters[p] = _call_counters.get(p, 0) + 1
+    n = _call_counters[p]
+
     ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     args_str = json.dumps(args, ensure_ascii=False, indent=2)
     if len(result) > _MAX_RESULT:
@@ -74,7 +74,7 @@ def log_tool_call(tool_name: str, args: dict, result: str, agent_dir: "Path | No
         result_str = result
 
     block = (
-        f"[{ts}] #{_call_counter}  {tool_name}\n"
+        f"[{ts}] #{n}  {tool_name}\n"
         f"ARGS:\n{args_str}\n"
         f"RESULT:\n{result_str}\n"
         f"{_SEPARATOR}\n"
