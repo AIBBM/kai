@@ -380,7 +380,7 @@ class AppToolsMixin(_MixinBase):
 
     async def _app_list_open_agents(self) -> str:
         from textual.widgets import TabbedContent
-        tabs = getattr(self, "_agent_tabs", {})
+        tabs = self.tab_state.agent_tabs
         if not tabs:
             return "目前沒有任何已開啟的 agent tab。"
         try:
@@ -458,7 +458,7 @@ class AppToolsMixin(_MixinBase):
         from textual.widgets import TabbedContent
         # 若已開啟，直接切換 tab
         q = name.lower()
-        for tab_id, agent in getattr(self, "_agent_tabs", {}).items():
+        for tab_id, agent in self.tab_state.agent_tabs.items():
             dn = agent.display_name.lower()
             nick = (agent._nickname or "").lower()
             if q == dn or q == nick or q in dn or (nick and q in nick):
@@ -479,17 +479,17 @@ class AppToolsMixin(_MixinBase):
 
     async def _app_close_agent(self, name: str = "") -> str:
         if not name:
-            if not self._agent_tabs:
+            if not self.tab_state.agent_tabs:
                 return "目前沒有開啟中的 agent tab"
-            if len(self._agent_tabs) == 1:
-                tab_id, ag = next(iter(self._agent_tabs.items()))
+            if len(self.tab_state.agent_tabs) == 1:
+                tab_id, ag = next(iter(self.tab_state.agent_tabs.items()))
                 agent_name = ag.display_name
                 await self._maybe_close_tab(tab_id)
                 return f"✅ 已關閉 agent：{agent_name}"
-            names = "、".join(ag.display_name for ag in self._agent_tabs.values())
+            names = "、".join(ag.display_name for ag in self.tab_state.agent_tabs.values())
             return f"目前有多個開啟中的 agent：{names}。請指定要關閉哪一個。"
         q = name.lower()
-        for tab_id, ag in list(self._agent_tabs.items()):
+        for tab_id, ag in list(self.tab_state.agent_tabs.items()):
             if q in ag.display_name.lower() or (ag._nickname and q in ag._nickname.lower()):
                 agent_name = ag.display_name
                 await self._maybe_close_tab(tab_id)

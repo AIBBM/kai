@@ -36,27 +36,27 @@ class StreamingMixin(_MixinBase):
         stream_msg: AIMessage | None = None
         buf: list[str] = []
 
-        self._last_send_text = original_text or text
+        self.input_state.last_send_text = original_text or text
         agent._cancelled = False
         if not ephemeral:
-            self._resumed_from = None
+            self.session.resumed_from = None
             # 清除持久化 resume 狀態：有新訊息代表已脫離 resume 快照
             _state = agent._history_file.resolve().parent / ".history" / ".resumed_from"
             _state.unlink(missing_ok=True)
             try:
                 from textual.widgets import TabbedContent
                 tab_id = self.query_one("#center-tabs", TabbedContent).active or "chat"
-                self._tab_resumed_from.pop(tab_id, None)
+                self.session.tab_resumed_from.pop(tab_id, None)
             except Exception:
                 pass
         _history_snapshot = [m.copy() for m in agent.history] if ephemeral else None
-        self._spin_idx = 0
-        self._spin_label = "等待回覆"
+        self.ui_state.spin_idx = 0
+        self.ui_state.spin_label = "等待回覆"
 
         def _tick() -> None:
-            self._spin_idx = (self._spin_idx + 1) % len(SPINNER)
-            dbg = "  [dim]🔧 debug[/dim]" if self._debug_tools else ""
-            prompt.border_title = f"{SPINNER[self._spin_idx]} {self._spin_label}{dbg}"
+            self.ui_state.spin_idx = (self.ui_state.spin_idx + 1) % len(SPINNER)
+            dbg = "  [dim]🔧 debug[/dim]" if self.ui_state.debug_tools else ""
+            prompt.border_title = f"{SPINNER[self.ui_state.spin_idx]} {self.ui_state.spin_label}{dbg}"
 
         timer = self.set_interval(0.08, _tick)
         prompt.add_class("streaming")
@@ -71,7 +71,7 @@ class StreamingMixin(_MixinBase):
             _last_render: float = 0.0
 
             async def on_thinking(content: str) -> None:
-                self._spin_label = "思考中"
+                self.ui_state.spin_label = "思考中"
                 preview = content[:2000] + ("…" if len(content) > 2000 else "")
                 await msgs.mount(Collapsible(
                     Static(preview, markup=False),
@@ -83,7 +83,7 @@ class StreamingMixin(_MixinBase):
 
             async def on_token(chunk: str) -> None:
                 nonlocal stream_msg, _last_render
-                self._spin_label = "生成中"
+                self.ui_state.spin_label = "生成中"
                 buf.append(chunk)
                 if stream_msg is None:
                     await msgs.mount(Static(f"🤖 {agent.display_name}", classes="ai-header", markup=False))
@@ -159,7 +159,7 @@ class StreamingMixin(_MixinBase):
 
             async def on_tool_call(name: str, args: dict, result: str) -> None:
                 nonlocal stream_msg, buf
-                self._spin_label = "工具回應中"
+                self.ui_state.spin_label = "工具回應中"
                 if stream_msg and buf:
                     _pre = re.sub(r"\s*<next>.*?</next>\s*$", "", "".join(buf), flags=re.DOTALL).rstrip()
                     await stream_msg.update_content(_pre, final=True)
@@ -175,7 +175,7 @@ class StreamingMixin(_MixinBase):
                     self.query_one("#file-tree", FileTree).refresh_tree()
                 icon = "❌" if is_err else ("⚠️" if is_warn else "🔧")
                 card_class = "tool-debug tool-debug-error" if is_err else "tool-debug"
-                if not self._debug_tools:
+                if not self.ui_state.debug_tools:
                     if is_err:
                         args_preview = json.dumps(args, ensure_ascii=False)
                         if len(args_preview) > 300:
@@ -274,26 +274,26 @@ class StreamingMixin(_MixinBase):
             prompt.remove_class("streaming")
             self._update_prompt_title()
             prompt.disabled = False
-            prompt.placeholder = f"傳訊息給 {agent.display_name}..."
+            prompt.reset_prediction(f"傳訊息給 {agent.display_name}...")
             prompt.focus()
-            if getattr(self, "_restore_input", False):
-                self._restore_input = False
-                restored = getattr(self, "_last_send_text", "")
+            if self.input_state.restore_input:
+                self.input_state.restore_input = False
+                restored = self.input_state.last_send_text
                 prompt.value = restored
                 prompt.cursor_position = len(restored)
             if ephemeral and _history_snapshot is not None:
                 new_msgs = agent.history[len(_history_snapshot):]
-                self._last_ephemeral = new_msgs if new_msgs else None
+                self.input_state.last_ephemeral = new_msgs if new_msgs else None
                 agent.history = _history_snapshot
                 agent.save_history()
-                if self._last_ephemeral:
+                if self.input_state.last_ephemeral:
                     self.notify("💾 /save 可將此回答存入對話歷史", timeout=4)
 
         if not ephemeral:
             prediction = agent.last_prediction
             if prediction:
                 prompt.show_prediction(prediction)
-            _pending = getattr(self, "_pending_open_agent", None)
+            _pending = self.tab_state.pending_open_agent
             if _pending:
-                self._pending_open_agent = None
+                self.tab_state.pending_open_agent = None
                 await self._do_load_agent(_pending)

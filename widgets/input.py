@@ -100,6 +100,16 @@ class HistoryInput(Input):
         self.value = before + marker + after
         self.cursor_position = len(before) + len(marker)
 
+    def reset_prediction(self, new_placeholder: str | None = None) -> None:
+        """清除 ghost text 預測狀態，避免 _real_placeholder 過期汙染。
+        在切換 tab 或新回覆開始時呼叫，可同時設定新的 placeholder。
+        """
+        self._real_placeholder = ""
+        self._pending_prediction = ""
+        self._suggestion = ""
+        if new_placeholder is not None:
+            self.placeholder = new_placeholder
+
     def show_prediction(self, text: str) -> None:
         """顯示 AI 預測 ghost text。input 空時用 placeholder swap，有內容時用 _suggestion。"""
         self._pending_prediction = text
@@ -332,6 +342,14 @@ class ChatAutoComplete(AutoComplete):
         self.absolute_offset = Offset(max(0, x - 1), max(0, y - h))
 
     def post_completion(self) -> None:
+        text = self._target_state.text
+        # /cd 與 !cd：選取中間目錄後直接關閉，讓使用者可按 Enter 確認，不強制選到最末層
+        _is_cd = text.startswith("/cd ") or (
+            text.startswith("!") and text.lstrip("!").lstrip().startswith("cd ")
+        )
+        if _is_cd:
+            self.action_hide()
+            return
         if self.target.value.endswith("/"):
             return
         self.action_hide()

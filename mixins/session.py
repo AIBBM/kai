@@ -13,7 +13,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import Static, TabbedContent
 
 from core.agent import Agent
-from core.config import _normalize, apply_kai_config, current_kai_config, ensure_kai_dir, get_nickname, load_kai_config
+from core.config import _normalize, apply_kai_config, current_kai_config, ensure_kai_dir, get_nickname, load_kai_config, reload_env
 from core.models import REGISTRY
 from widgets.input import HistoryInput
 from widgets.sidebar import Sidebar
@@ -56,16 +56,17 @@ class SessionMixin(_MixinBase):
         self.notify(f"✅ {model} 暱稱設為「{arg}」", timeout=3)
 
     def _apply_project_config(self) -> None:
-        """重新讀取 .kai/config.json 並套用所有設定到 agent 和 UI。"""
+        """重新讀取 .env + .kai/config.json 並套用所有設定到 agent 和 UI。"""
+        reload_env()
         cfg = load_kai_config()
         apply_kai_config(cfg)
         if "history_keep" in cfg:
             self.agent.history_keep = int(cfg["history_keep"])
         if "num_ctx" in cfg:
             self.agent.profile.num_ctx = int(cfg["num_ctx"])
-        if hasattr(self, "_debug_tools") and "debug_tools" in cfg:
+        if "debug_tools" in cfg:
             v = cfg["debug_tools"]
-            self._debug_tools = bool(v) if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes")
+            self.ui_state.debug_tools = bool(v) if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes")
         if "model" in cfg and cfg["model"] != self.agent.profile.name:
             self.call_later(self.action_switch_model, cfg["model"])
 
@@ -81,27 +82,27 @@ class SessionMixin(_MixinBase):
         self.notify("✅ .kai/config.json 已重新載入", severity="information", timeout=3)
 
     async def _do_cd(self, arg: str) -> None:
-        target = Path(self._prev_cwd if arg == "-" else arg).expanduser().resolve()
+        target = Path(self.session.prev_cwd if arg == "-" else arg).expanduser().resolve()
         if not target.is_dir():
             self.notify(f"目錄不存在：{target}", severity="error")
             return
         self.agent.save_history()
-        self._prev_cwd = os.getcwd()
+        self.session.prev_cwd = os.getcwd()
         os.chdir(target)
         ensure_kai_dir()
         self._apply_project_config()
         # reset session state for new directory
-        self._resumed_from = None
-        self._tab_resumed_from["chat"] = None
-        self._session_name = ""
-        self._tab_session_names.pop("chat", None)
+        self.session.resumed_from = None
+        self.session.tab_resumed_from["chat"] = None
+        self.session.name = ""
+        self.session.tab_names.pop("chat", None)
         # check if new directory has a persisted resume state
         _state = self.agent._history_file.resolve().parent / ".history" / ".resumed_from"
         if _state.exists():
             _arch = _state.parent / _state.read_text(encoding="utf-8").strip()
             if _arch.exists():
-                self._resumed_from = _arch
-                self._tab_resumed_from["chat"] = _arch
+                self.session.resumed_from = _arch
+                self.session.tab_resumed_from["chat"] = _arch
                 self._load_session_name_from_archive(_arch)
         self.query_one("#sb-cwd", Static).update(str(target))
         self.query_one("#file-tree", FileTree).refresh_tree()
@@ -133,7 +134,7 @@ class SessionMixin(_MixinBase):
 
     def _update_subtitle(self) -> None:
         display = self.agent.display_name
-        name = getattr(self, "_session_name", "")
+        name = self.session.name
         self.sub_title = f"{display} · {name}" if name else display
 
     def _current_tab_id(self) -> str:
@@ -144,8 +145,8 @@ class SessionMixin(_MixinBase):
             return "chat"
 
     def _save_session_name_for_archive(self, archive: Path) -> None:
-        """把 _session_name 寫入 .names.json，然後清除。"""
-        name = getattr(self, "_session_name", "")
+        """把 session.name 寫入 .names.json，然後清除。"""
+        name = self.session.name
         if name:
             names_file = archive.parent / ".names.json"
             try:
@@ -154,8 +155,8 @@ class SessionMixin(_MixinBase):
                 names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception:
                 logger.warning(f"無法儲存 session 名稱：{archive.name}")
-            self._session_name = ""
-            self._tab_session_names.pop(self._current_tab_id(), None)
+            self.session.name = ""
+            self.session.tab_names.pop(self._current_tab_id(), None)
             self._update_subtitle()
         # 名稱已歸入 .names.json，刪除暫存的 .current_name
         try:
@@ -164,14 +165,14 @@ class SessionMixin(_MixinBase):
             pass
 
     def _load_session_name_from_archive(self, archive: Path) -> None:
-        """從 .names.json 讀取歸檔名稱並設入 _session_name。"""
+        """從 .names.json 讀取歸檔名稱並設入 session.name。"""
         names_file = archive.parent / ".names.json"
         try:
             names: dict = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
-            self._session_name = names.get(archive.name, "")
+            self.session.name = names.get(archive.name, "")
         except Exception:
-            self._session_name = ""
-        self._tab_session_names[self._current_tab_id()] = self._session_name
+            self.session.name = ""
+        self.session.tab_names[self._current_tab_id()] = self.session.name
         self._update_subtitle()
 
     def _current_name_file(self) -> Path:
@@ -179,13 +180,13 @@ class SessionMixin(_MixinBase):
         return self.agent._history_file.resolve().parent / ".history" / ".current_name"
 
     def _do_rename(self, arg: str) -> None:
-        name = getattr(self, "_session_name", "")
+        name = self.session.name
         if not arg:
             shown = name or "（未命名）"
             self.notify(f"目前 session 名稱：{shown}\n用法：/rename <名稱>", timeout=5)
             return
-        self._session_name = arg
-        self._tab_session_names[self._current_tab_id()] = arg
+        self.session.name = arg
+        self.session.tab_names[self._current_tab_id()] = arg
         # 持久化名稱，讓重啟後也能還原
         try:
             _nf = self._current_name_file()
@@ -209,7 +210,7 @@ class SessionMixin(_MixinBase):
         await msgs.remove_children()
         hist_file = agent._history_file.resolve()
         hist_dir = hist_file.parent / ".history"
-        if hist_file.exists() and self._resumed_from is None:
+        if hist_file.exists() and self.session.resumed_from is None:
             hist_dir.mkdir(exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             archive = hist_dir / f"history_{ts}.json"
@@ -220,17 +221,17 @@ class SessionMixin(_MixinBase):
             hist_file.rename(archive)
             self._save_session_name_for_archive(archive)
             self.notify(f"歷史已歸檔至 {hist_dir.name}/{archive.name}", timeout=3)
-        elif self._resumed_from is not None:
+        elif self.session.resumed_from is not None:
             hist_file.unlink(missing_ok=True)
-            self._session_name = ""
-            self._tab_session_names.pop(self._current_tab_id(), None)
+            self.session.name = ""
+            self.session.tab_names.pop(self._current_tab_id(), None)
             try:
                 self._current_name_file().unlink(missing_ok=True)
             except Exception:
                 pass
             self.notify("已清除（resume 後未新增對話，不重複歸檔）", timeout=3)
-        self._resumed_from = None
-        self._tab_resumed_from.pop(self._current_tab_id(), None)
+        self.session.resumed_from = None
+        self.session.tab_resumed_from.pop(self._current_tab_id(), None)
         agent.history = []
         agent._rebuild_system_prompt()
         agent.save_history()
@@ -282,14 +283,14 @@ class SessionMixin(_MixinBase):
             if idx is not None:
                 await self._resume_load(archives[idx])
 
-        self.push_screen(ResumeScreen(entries, archives, names_file, self._resumed_from), _on_result)
+        self.push_screen(ResumeScreen(entries, archives, names_file, self.session.resumed_from), _on_result)
 
     async def _resume_load(self, archive: Path) -> None:
         # 切換前先處理當前 session
         real_msgs = [m for m in self.agent.history if m.get("role") != "system"]
         hist_file = self.agent._history_file.resolve()
         hist_dir = hist_file.parent / ".history"
-        if real_msgs and self._resumed_from is None and hist_file.exists():
+        if real_msgs and self.session.resumed_from is None and hist_file.exists():
             # 有新訊息且非 resume 狀態 → 自動歸檔，避免切換時遺失
             hist_dir.mkdir(exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -301,10 +302,10 @@ class SessionMixin(_MixinBase):
             hist_file.rename(auto_arch)
             self._save_session_name_for_archive(auto_arch)
             self.notify(f"已自動歸檔：{auto_arch.name}", timeout=3)
-        elif self._resumed_from is not None and hist_file.exists():
+        elif self.session.resumed_from is not None and hist_file.exists():
             # resume 後未新增訊息直接切換 → 刪除，不重複歸檔
             hist_file.unlink(missing_ok=True)
-            self._session_name = ""
+            self.session.name = ""
 
         try:
             shutil.copy2(archive, self.agent._history_file)
@@ -319,10 +320,10 @@ class SessionMixin(_MixinBase):
         await msgs.remove_children()
         self.agent.reset_history()
         await self._render_history_into(msgs, self.agent)
-        self._resumed_from = archive
-        self._tab_resumed_from[self._current_tab_id()] = archive
+        self.session.resumed_from = archive
+        self.session.tab_resumed_from[self._current_tab_id()] = archive
         self._load_session_name_from_archive(archive)
-        name_display = getattr(self, "_session_name", "") or archive.name
+        name_display = self.session.name or archive.name
         self.notify(f"已載入：{name_display}（有新對話後才會重新歸檔）", timeout=4)
 
     async def action_switch_model(self, model_name: str) -> None:
@@ -340,10 +341,10 @@ class SessionMixin(_MixinBase):
         self.agent.mcp_client = old_mcp
         self.agent.mcp_context = old_ctx
         self.agent._rebuild_system_prompt()
-        self._think_override = None
+        self.ui_state.think_override = None
         tc = self.query_one("#center-tabs", TabbedContent)
         if tc.active == "chat":
-            self._main_agent = self.agent
+            self.tab_state.main_agent = self.agent
         self._sync_cap_bar()
         prompt = self.query_one("#prompt", HistoryInput)
         prompt.placeholder = f"傳訊息給 {get_nickname(model_name)}..."

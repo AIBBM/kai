@@ -84,7 +84,7 @@ class AgentsMixin(_MixinBase):
             self.notify(str(e), severity="error")
             return
         # 已開啟同一個 agent dir → 切換過去，不重複建 tab
-        for tab_id, existing in list(self._agent_tabs.items()):
+        for tab_id, existing in list(self.tab_state.agent_tabs.items()):
             if getattr(existing, "_agent_dir", None) == adir:
                 tc = self.query_one("#center-tabs", TabbedContent)
                 tc.active = tab_id
@@ -120,13 +120,13 @@ class AgentsMixin(_MixinBase):
             agent._tts_config = tts_raw
         else:
             agent._tts_config = None
-        tab_idx = len(self._agent_tabs)
+        tab_idx = len(self.tab_state.agent_tabs)
         tab_id = f"agent-{tab_idx}"
         scroll = VerticalScroll(id=f"msgs-agent-{tab_idx}")
         pane = TabPane(f"🤖 {nickname} ×", scroll, id=tab_id)
         tc = self.query_one("#center-tabs", TabbedContent)
         await tc.add_pane(pane)
-        self._agent_tabs[tab_id] = agent
+        self.tab_state.agent_tabs[tab_id] = agent
         tc.active = tab_id
         self.agent = agent
         await self._render_history_into(scroll, agent)
@@ -168,7 +168,12 @@ class AgentsMixin(_MixinBase):
 
         async def on_done(*_) -> None:
             if stream_msg and buf:
-                await stream_msg.update_content("".join(buf), final=True)
+                _hist = agent.history
+                if _hist and _hist[-1]["role"] == "assistant":
+                    _display = str(_hist[-1]["content"])
+                else:
+                    _display = "".join(buf)
+                await stream_msg.update_content(_display, final=True)
 
         try:
             await agent.chat(
@@ -189,7 +194,7 @@ class AgentsMixin(_MixinBase):
             prompt.disabled = False
             if self.agent is agent:
                 self._update_prompt_title()
-                prompt.placeholder = f"傳訊息給 {agent.display_name}..."
+                prompt.reset_prediction(f"傳訊息給 {agent.display_name}...")
                 prompt.focus()
 
     async def _do_reload_agent(self) -> None:
@@ -248,10 +253,10 @@ class AgentsMixin(_MixinBase):
             self.agent.mcp_context = getattr(old, "mcp_context", "")
             self.agent._nickname = name
             self.agent._tts_config = new_tts
-            # 同步更新 _agent_tabs 映射
-            for tid, ag in list(self._agent_tabs.items()):
+            # 同步更新 agent_tabs 映射
+            for tid, ag in list(self.tab_state.agent_tabs.items()):
                 if ag is old:
-                    self._agent_tabs[tid] = self.agent
+                    self.tab_state.agent_tabs[tid] = self.agent
                     break
             changes.append(f"model → {new_model}")
         else:

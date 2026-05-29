@@ -12,32 +12,40 @@ load_dotenv()
 KAI_DIR = Path(".kai")
 # kai package 目錄（全域，不跟著 cwd 走）
 _KAI_PKG_DIR = Path(__file__).parent.parent
-
-MODEL = os.getenv("MODEL", "qwen3-vl:4b")  # 使用的 Ollama 模型
-CREATE_AGENT_MODEL = os.getenv("CREATE_AGENT_MODEL", "")  # /create-agent 設計用 model（空字串 = 同 MODEL）
-SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888/search")  # SearXNG API
-NUM_CTX = int(os.getenv("NUM_CTX", "0"))  # context window 大小，0 表示使用模型預設
-MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "15"))  # 單輪工具呼叫上限
-MAX_SEARCH_CHARS = int(os.getenv("MAX_SEARCH_CHARS", "8000"))
-SEARCH_NUM_RESULTS = int(os.getenv("SEARCH_NUM_RESULTS", "5"))  # 搜尋結果字元上限
-SEARCH_TIMEOUT = float(os.getenv("SEARCH_TIMEOUT", "8.0"))  # 搜尋逾時秒數
-SEARCH_RETRIES = int(os.getenv("SEARCH_RETRIES", "2"))  # 搜尋重試次數
-HISTORY_KEEP = int(os.getenv("HISTORY_KEEP", "10"))  # 對話歷史保留則數
-HISTORY_FILE = Path(os.getenv("HISTORY_FILE", str(KAI_DIR / "history.json")))  # 歷史儲存路徑
-USERNAME = os.getenv("USERNAME", "你")  # 提示符顯示名稱
+HISTORY_FILE = Path(os.getenv("HISTORY_FILE", str(KAI_DIR / "history.json")))
 # bundled mcp_servers.json（隨 package 走），僅供首次啟動複製到 ~/.kai/ 用
 BUNDLED_MCP_FILE = _KAI_PKG_DIR / "mcp_servers.json"
-BASH_TIMEOUT = int(os.getenv("BASH_TIMEOUT", "30"))  # bash_exec 預設超時秒數
-TEMPERATURE = float(os.getenv("TEMPERATURE", "0.6"))  # 生成溫度（0=確定性，1=創意）
-TOP_K = int(os.getenv("TOP_K", "20"))                 # top-k 採樣（0=停用）
-TOP_P = float(os.getenv("TOP_P", "0.95"))             # nucleus sampling
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")      # Google Gemini API key
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")  # DeepSeek API key
-JINA_API_KEY = os.getenv("JINA_API_KEY", "")          # Jina Reader API key（可選，有 key 額度更高）
-FETCH_MAX_CHARS = int(os.getenv("FETCH_MAX_CHARS", "12000"))  # fetch_url 回傳字元上限
-OLLAMA_STREAM_TIMEOUT = int(os.getenv("OLLAMA_STREAM_TIMEOUT", "120"))  # Ollama 每個 chunk 最長等待秒數
-MCP_TOOL_TIMEOUT = float(os.getenv("MCP_TOOL_TIMEOUT", "60.0"))        # MCP 單次工具呼叫逾時秒數
-DEBUG_TOOLS = os.getenv("DEBUG_TOOLS", "0").strip().lower() in ("1", "true", "yes")  # 啟動時開啟工具除錯模式
+
+
+def _apply_env(g: dict) -> None:
+    """將環境變數套用到目標 globals dict。模組初始化與 reload_env 共用，避免重複定義預設值。
+    新增 env var 只需在這裡加一行，兩個呼叫點都會生效。
+    """
+    g["MODEL"]                = os.getenv("MODEL", "qwen3-vl:4b")
+    g["CREATE_AGENT_MODEL"]   = os.getenv("CREATE_AGENT_MODEL", "")
+    g["SEARXNG_URL"]          = os.getenv("SEARXNG_URL", "http://localhost:8888/search")
+    g["NUM_CTX"]              = int(os.getenv("NUM_CTX", "0"))
+    g["MAX_TOOL_CALLS"]       = int(os.getenv("MAX_TOOL_CALLS", "15"))
+    g["MAX_SEARCH_CHARS"]     = int(os.getenv("MAX_SEARCH_CHARS", "8000"))
+    g["SEARCH_NUM_RESULTS"]   = int(os.getenv("SEARCH_NUM_RESULTS", "5"))
+    g["SEARCH_TIMEOUT"]       = float(os.getenv("SEARCH_TIMEOUT", "8.0"))
+    g["SEARCH_RETRIES"]       = int(os.getenv("SEARCH_RETRIES", "2"))
+    g["HISTORY_KEEP"]         = int(os.getenv("HISTORY_KEEP", "10"))
+    g["USERNAME"]             = os.getenv("USERNAME", "你")
+    g["BASH_TIMEOUT"]         = int(os.getenv("BASH_TIMEOUT", "30"))
+    g["TEMPERATURE"]          = float(os.getenv("TEMPERATURE", "0.6"))
+    g["TOP_K"]                = int(os.getenv("TOP_K", "20"))
+    g["TOP_P"]                = float(os.getenv("TOP_P", "0.95"))
+    g["FETCH_MAX_CHARS"]      = int(os.getenv("FETCH_MAX_CHARS", "12000"))
+    g["OLLAMA_STREAM_TIMEOUT"]= int(os.getenv("OLLAMA_STREAM_TIMEOUT", "120"))
+    g["MCP_TOOL_TIMEOUT"]     = float(os.getenv("MCP_TOOL_TIMEOUT", "60.0"))
+    g["DEBUG_TOOLS"]          = os.getenv("DEBUG_TOOLS", "0").strip().lower() in ("1", "true", "yes")
+    g["GEMINI_API_KEY"]       = os.getenv("GEMINI_API_KEY", "")
+    g["DEEPSEEK_API_KEY"]     = os.getenv("DEEPSEEK_API_KEY", "")
+    g["JINA_API_KEY"]         = os.getenv("JINA_API_KEY", "")
+
+
+_apply_env(globals())
 
 
 def _normalize(model: str) -> str:
@@ -56,6 +64,12 @@ def ensure_kai_dir() -> Path:
     d = Path(".kai")
     d.mkdir(exist_ok=True)
     return d
+
+
+def reload_env() -> None:
+    """重新讀取 .env 並更新 module globals（支援 /reload-config 熱套用 .env 變更）。"""
+    load_dotenv(override=True)
+    _apply_env(globals())
 
 
 def load_kai_config() -> dict:

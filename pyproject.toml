@@ -23,6 +23,7 @@ dependencies = [
     "gradio-client>=2.5.0",
     "websockets>=16.0",
     "textual-fspicker>=1.0.1",
+    "google-genai>=2.6.0",
 ]
 
 [dependency-groups]
