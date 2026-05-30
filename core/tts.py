@@ -377,6 +377,85 @@ async def _speak_kokoro_api(
         Path(tmp).unlink(missing_ok=True)
 
 
+async def _speak_azure(
+    text: str,
+    voice: str = "zh-TW-HsiaoChenNeural",
+    lang: str = "",
+    speed: float = 1.0,
+    key: str = "",
+    region: str = "",
+    player: str = "auto",
+) -> None:
+    """Azure Cognitive Services TTS REST API（不需安裝 SDK）。
+    key/region 優先用傳入值，空字串時 fallback 到 AZURE_TTS_KEY / AZURE_TTS_REGION env var。
+    """
+    import html
+    import urllib.error
+    import urllib.request
+    from . import config as _cfg
+
+    _key    = key    or _cfg.AZURE_TTS_KEY
+    _region = region or _cfg.AZURE_TTS_REGION
+    if not _key or not _region:
+        logger.warning("tts azure: 需設定 AZURE_TTS_KEY 與 AZURE_TTS_REGION（.env 或 agent config.json tts.key/tts.region）")
+        return
+
+    # 從 voice name 推斷 lang（e.g. "zh-TW-HsiaoChenNeural" → "zh-TW"）
+    _lang = lang
+    if not _lang and "-" in voice:
+        parts = voice.split("-")
+        _lang = f"{parts[0]}-{parts[1]}" if len(parts) >= 3 else voice
+
+    # speed → SSML prosody rate（+20% / -10% / +0%）
+    rate = f"{int((speed - 1) * 100):+d}%"
+    ssml = (
+        "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
+        f"xml:lang='{_lang}'>"
+        f"<voice name='{voice}'>"
+        f"<prosody rate='{rate}'>{html.escape(text)}</prosody>"
+        f"</voice></speak>"
+    )
+
+    url = f"https://{_region}.tts.speech.microsoft.com/cognitiveservices/v1"
+
+    def _fetch() -> bytes:
+        req = urllib.request.Request(
+            url,
+            data=ssml.encode("utf-8"),
+            headers={
+                "Ocp-Apim-Subscription-Key": _key,
+                "Content-Type": "application/ssml+xml",
+                "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+                "User-Agent": "kai-tts/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read()  # type: ignore[return-value]
+
+    logger.info(f"tts azure: {len(text)} chars  voice={voice}  region={_region}")
+    _t0 = asyncio.get_event_loop().time()
+    try:
+        audio_bytes = await asyncio.get_event_loop().run_in_executor(None, _fetch)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:200]
+        logger.warning(f"tts azure HTTP {e.code}：{body}")
+        return
+    except Exception as e:
+        logger.warning(f"tts azure 請求失敗：{e}")
+        return
+    logger.info(f"tts azure done in {asyncio.get_event_loop().time() - _t0:.1f}s  bytes={len(audio_bytes)}")
+
+    fd, tmp = tempfile.mkstemp(suffix=".mp3", prefix="kai_tts_")
+    os.close(fd)
+    try:
+        Path(tmp).write_bytes(audio_bytes)
+        _play_file_sync(tmp, player)
+    except Exception as e:
+        logger.warning(f"tts azure 播放失敗：{e}")
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
 async def speak(
     text: str,
     voice: str = "en-US-AriaNeural",
@@ -386,10 +465,16 @@ async def speak(
     host: str = "localhost",
     port: int = 8886,
     speed: float = 1.0,
+    key: str = "",
+    region: str = "",
 ) -> None:
-    """語音播放。engine 可為 'edge-tts'、'kokoro'、'kokoro-api'、'melotts'。"""
+    """語音播放。engine 可為 'edge-tts'、'azure-tts'、'kokoro'、'kokoro-api'、'melotts'。"""
     text = _clean_for_tts(text)
     if not text:
+        return
+
+    if engine == "azure-tts":
+        await _speak_azure(text, voice=voice, lang=lang, speed=speed, key=key, region=region, player=player)
         return
 
     if engine == "kokoro":

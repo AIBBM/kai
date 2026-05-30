@@ -43,6 +43,8 @@ def _apply_env(g: dict) -> None:
     g["GEMINI_API_KEY"]       = os.getenv("GEMINI_API_KEY", "")
     g["DEEPSEEK_API_KEY"]     = os.getenv("DEEPSEEK_API_KEY", "")
     g["JINA_API_KEY"]         = os.getenv("JINA_API_KEY", "")
+    g["AZURE_TTS_KEY"]        = os.getenv("AZURE_TTS_KEY", "")
+    g["AZURE_TTS_REGION"]     = os.getenv("AZURE_TTS_REGION", "")
 
 
 _apply_env(globals())

@@ -252,8 +252,9 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             ("/close-agent", "關閉 agent tab  /close-agent [name]（省略 name 關目前 tab）"),
             ("/reload-config", "重新載入 .kai/config.json 並套用所有設定"),
             ("/init-config", "互動式 config 面板：選取 key，L→local G→global 匯出"),
-            ("/tts", "切換 TTS 引擎  /tts <edge-tts|melotts|kokoro-api|kokoro|off>"),
+            ("/tts", "切換 TTS 引擎  /tts <edge-tts|azure-tts|melotts|kokoro-api|kokoro|off>"),
             ("/tts edge-tts", "切換 TTS 為 edge-tts（雲端）"),
+            ("/tts azure-tts", "切換 TTS 為 Azure Cognitive Services TTS"),
             ("/tts melotts", "切換 TTS 為 melotts（Docker 8886）"),
             ("/tts kokoro-api", "切換 TTS 為 kokoro-api（Docker 8885）"),
             ("/tts kokoro", "切換 TTS 為 kokoro（本地 ONNX）"),
@@ -708,7 +709,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         self.query_one("#prompt", HistoryInput).border_title = base + suffix
 
     def _do_tts_switch(self, arg: str) -> None:
-        _ENGINES = ("edge-tts", "kokoro", "kokoro-api", "melotts", "off")
+        _ENGINES = ("edge-tts", "azure-tts", "kokoro", "kokoro-api", "melotts", "off")
         engine = arg.strip().lower()
         if not engine:
             cfg = getattr(self.agent, "_tts_config", None)
@@ -725,15 +726,19 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             self.notify("TTS 已關閉", timeout=3)
             return
         _defaults: dict[str, dict] = {
-            "kokoro":     {"voice": "af_sky",           "lang": "en-us"},
-            "kokoro-api": {"voice": "af_bella",         "lang": "en-us", "port": 8885},
-            "melotts":    {"voice": "EN-US",            "lang": "en",    "port": 8886},
-            "edge-tts":   {"voice": "en-US-AriaNeural", "lang": "en-us"},
+            "kokoro":     {"voice": "af_sky",                 "lang": "en-us"},
+            "kokoro-api": {"voice": "af_bella",               "lang": "en-us", "port": 8885},
+            "melotts":    {"voice": "EN-US",                  "lang": "en",    "port": 8886},
+            "edge-tts":   {"voice": "en-US-AriaNeural",       "lang": "en-us"},
+            "azure-tts":  {"voice": "zh-TW-HsiaoChenNeural",  "lang": "zh-TW"},
         }
         cfg = dict(getattr(self.agent, "_tts_config", None) or {})
         cfg.update({"engine": engine, **_defaults[engine]})
         self.agent._tts_config = cfg
-        self.notify(f"TTS 切換為：{engine}  voice={cfg['voice']}", timeout=3)
+        voice_info = cfg["voice"]
+        if engine == "azure-tts" and not (cfg.get("key") or _kai_cfg.AZURE_TTS_KEY):
+            voice_info += "  ⚠️ 需設定 AZURE_TTS_KEY"
+        self.notify(f"TTS 切換為：{engine}  voice={voice_info}", timeout=4)
 
     def _thinking_active(self) -> bool:
         if self.ui_state.think_override is not None:

@@ -152,6 +152,8 @@ class StreamingMixin(_MixinBase):
                         host=_tts_cfg.get("host", "localhost"),
                         port=int(_tts_cfg.get("port", 8886)),
                         speed=float(_tts_cfg.get("speed", 1.0)),
+                        key=_tts_cfg.get("key", ""),
+                        region=_tts_cfg.get("region", ""),
                     )
                     self._tts_future = asyncio.run_coroutine_threadsafe(
                         speak(_display, **_tts_kw), get_tts_loop()
