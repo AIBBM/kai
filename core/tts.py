@@ -45,6 +45,10 @@ def cancel_current() -> None:
         proc = _current_proc
     if proc and proc.poll() is None:
         proc.terminate()
+        try:
+            proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            proc.kill()  # SIGTERM 無效時強制 SIGKILL
 
 
 def _detect_player(ext: str = "") -> str | None:
@@ -147,6 +151,18 @@ def _play_file_sync(path: str, player: str = "auto") -> None:
         logger.warning(f"tts 播放失敗：{e}")
 
 
+async def _play_async(path: str, player: str) -> None:
+    """非同步播放，不阻塞 TTS event loop。
+    _play_file_sync 若直接呼叫會卡住整條 loop，導致 cancel() 無法生效、
+    排隊的 TTS 進不去，直到音訊裝置釋放（如關機）才恢復。
+    """
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _play_file_sync, path, player)
+    except asyncio.CancelledError:
+        cancel_current()  # 確保 subprocess 被殺掉
+        raise
+
+
 def _clean_for_tts(text: str) -> str:
     """移除 markdown 格式符號與不應朗讀的符號。"""
     text = re.sub(r"```[\s\S]*?```", "", text)
@@ -219,7 +235,7 @@ async def _speak_melotts(
                     os.close(fd)
                     try:
                         urllib.request.urlretrieve(url, tmp)
-                        _play_file_sync(tmp, player)
+                        await _play_async(tmp, player)
                     except Exception as e:
                         logger.warning(f"tts melotts 播放失敗：{e}")
                     finally:
@@ -304,7 +320,7 @@ async def _speak_kokoro(
     os.close(fd)
     try:
         sf.write(tmp, samples, sample_rate)
-        _play_file_sync(tmp, player)
+        await _play_async(tmp, player)
     except Exception as e:
         logger.warning(f"tts kokoro 播放失敗：{e}")
     finally:
@@ -370,7 +386,7 @@ async def _speak_kokoro_api(
             logger.debug(f"tts kokoro-api: {_orig_s:.1f}s → {len(_data)/_sr:.1f}s (trimmed {_orig_s - len(_data)/_sr:.1f}s noise)")
         except Exception as _e:
             logger.warning(f"tts kokoro-api: trim 失敗（仍嘗試播放）：{_e}")
-        _play_file_sync(tmp, player)
+        await _play_async(tmp, player)
     except Exception as e:
         logger.warning(f"tts kokoro-api 播放失敗：{e}")
     finally:
@@ -468,7 +484,7 @@ async def _speak_azure(
     os.close(fd)
     try:
         Path(tmp).write_bytes(audio_bytes)
-        _play_file_sync(tmp, player)
+        await _play_async(tmp, player)
     except Exception as e:
         logger.warning(f"tts azure 播放失敗：{e}")
     finally:
@@ -524,7 +540,7 @@ async def speak(
     try:
         communicate = edge_tts.Communicate(text, voice)
         await communicate.save(tmp)
-        _play_file_sync(tmp, player)
+        await _play_async(tmp, player)
     except Exception as e:
         logger.warning(f"tts 失敗：{e}")
     finally:
