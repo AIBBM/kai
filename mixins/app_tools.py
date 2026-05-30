@@ -214,13 +214,13 @@ _SET_TTS_TOOL = {
         "description": (
             "切換 TTS 語音引擎或關閉語音。"
             "當用戶說「開啟語音」、「關閉語音」、「換成 kokoro」時使用。"
-            "可用引擎：edge-tts、melotts、kokoro-api、kokoro、off。"
+            "可用引擎：edge-tts、azure-tts、melotts、kokoro-api、kokoro、off。"
             "**必須呼叫此工具，嚴禁只用文字假裝已切換。**"
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "engine": {"type": "string", "description": "語音引擎：edge-tts / melotts / kokoro-api / kokoro / off"},
+                "engine": {"type": "string", "description": "語音引擎：edge-tts / azure-tts / melotts / kokoro-api / kokoro / off"},
             },
             "required": ["engine"],
         },
