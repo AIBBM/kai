@@ -142,6 +142,10 @@ class StreamingMixin(_MixinBase):
                     from core.tts import cancel_current as _tts_cancel, get_tts_loop, speak
                     from loguru import logger as _log
                     _tts_cancel()  # 終止上一段語音（如正在播放）
+                    # 同時取消排隊中但尚未開始的 future，避免多輪 tool call 造成 TTS 積壓
+                    _prev = getattr(self, "_tts_future", None)
+                    if _prev and not _prev.done():
+                        _prev.cancel()
                     _engine = _tts_cfg.get("engine", "edge-tts")
                     _log.debug(f"tts: schedule engine={_engine} chars={len(_display)}")
                     _tts_kw = dict(

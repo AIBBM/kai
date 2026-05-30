@@ -452,6 +452,9 @@ async def _speak_azure(
     _t0 = asyncio.get_event_loop().time()
     try:
         audio_bytes = await asyncio.get_event_loop().run_in_executor(None, _fetch)
+    except asyncio.CancelledError:
+        logger.debug("tts azure: 已取消（被新回覆覆蓋）")
+        raise  # 讓 CancelledError 正確傳播，不阻塞 TTS loop
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")[:200]
         logger.warning(f"tts azure HTTP {e.code}：{body}")
