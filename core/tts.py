@@ -384,20 +384,38 @@ async def _speak_azure(
     speed: float = 1.0,
     key: str = "",
     region: str = "",
+    endpoint: str = "",
     player: str = "auto",
 ) -> None:
     """Azure Cognitive Services TTS REST API（不需安裝 SDK）。
-    key/region 優先用傳入值，空字串時 fallback 到 AZURE_TTS_KEY / AZURE_TTS_REGION env var。
+
+    Endpoint 優先順序：
+      1. 傳入 endpoint（或 AZURE_TTS_ENDPOINT）— 直接使用
+      2. 傳入 region（或 AZURE_TTS_REGION）— 推斷標準 Speech endpoint
     """
     import html
     import urllib.error
     import urllib.request
     from . import config as _cfg
 
-    _key    = key    or _cfg.AZURE_TTS_KEY
-    _region = region or _cfg.AZURE_TTS_REGION
-    if not _key or not _region:
-        logger.warning("tts azure: 需設定 AZURE_TTS_KEY 與 AZURE_TTS_REGION（.env 或 agent config.json tts.key/tts.region）")
+    _key      = key      or _cfg.AZURE_TTS_KEY
+    _endpoint = endpoint or _cfg.AZURE_TTS_ENDPOINT
+    _region   = region   or _cfg.AZURE_TTS_REGION
+
+    if not _key:
+        logger.warning("tts azure: 需設定 AZURE_TTS_KEY（.env 或 agent config.json tts.key）")
+        return
+
+    # 決定 TTS REST endpoint
+    if _endpoint:
+        # 使用者貼入完整 endpoint（e.g. https://eastasia.api.cognitive.microsoft.com/）
+        # Azure TTS REST 路徑固定為 cognitiveservices/v1
+        base = _endpoint.rstrip("/")
+        url = f"{base}/cognitiveservices/v1"
+    elif _region:
+        url = f"https://{_region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    else:
+        logger.warning("tts azure: 需設定 AZURE_TTS_REGION 或 AZURE_TTS_ENDPOINT")
         return
 
     # 從 voice name 推斷 lang（e.g. "zh-TW-HsiaoChenNeural" → "zh-TW"）
@@ -415,8 +433,6 @@ async def _speak_azure(
         f"<prosody rate='{rate}'>{html.escape(text)}</prosody>"
         f"</voice></speak>"
     )
-
-    url = f"https://{_region}.tts.speech.microsoft.com/cognitiveservices/v1"
 
     def _fetch() -> bytes:
         req = urllib.request.Request(
@@ -467,6 +483,7 @@ async def speak(
     speed: float = 1.0,
     key: str = "",
     region: str = "",
+    endpoint: str = "",
 ) -> None:
     """語音播放。engine 可為 'edge-tts'、'azure-tts'、'kokoro'、'kokoro-api'、'melotts'。"""
     text = _clean_for_tts(text)
@@ -474,7 +491,7 @@ async def speak(
         return
 
     if engine == "azure-tts":
-        await _speak_azure(text, voice=voice, lang=lang, speed=speed, key=key, region=region, player=player)
+        await _speak_azure(text, voice=voice, lang=lang, speed=speed, key=key, region=region, endpoint=endpoint, player=player)
         return
 
     if engine == "kokoro":

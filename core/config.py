@@ -45,6 +45,7 @@ def _apply_env(g: dict) -> None:
     g["JINA_API_KEY"]         = os.getenv("JINA_API_KEY", "")
     g["AZURE_TTS_KEY"]        = os.getenv("AZURE_TTS_KEY", "")
     g["AZURE_TTS_REGION"]     = os.getenv("AZURE_TTS_REGION", "")
+    g["AZURE_TTS_ENDPOINT"]   = os.getenv("AZURE_TTS_ENDPOINT", "")  # 可選，覆蓋 region 推斷的 endpoint
 
 
 _apply_env(globals())

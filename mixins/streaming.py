@@ -154,6 +154,7 @@ class StreamingMixin(_MixinBase):
                         speed=float(_tts_cfg.get("speed", 1.0)),
                         key=_tts_cfg.get("key", ""),
                         region=_tts_cfg.get("region", ""),
+                        endpoint=_tts_cfg.get("endpoint", ""),
                     )
                     self._tts_future = asyncio.run_coroutine_threadsafe(
                         speak(_display, **_tts_kw), get_tts_loop()
