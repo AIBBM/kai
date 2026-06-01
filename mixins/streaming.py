@@ -38,6 +38,12 @@ class StreamingMixin(_MixinBase):
 
         self.input_state.last_send_text = original_text or text
         agent._cancelled = False
+        # 記錄本次 streaming 所屬的 tab_id
+        try:
+            from textual.widgets import TabbedContent as _TC
+            _my_tab_id = self.query_one("#center-tabs", _TC).active or "chat"
+        except Exception:
+            _my_tab_id = "chat"
         if not ephemeral:
             self.session.resumed_from = None
             # 清除持久化 resume 狀態：有新訊息代表已脫離 resume 快照
@@ -59,6 +65,7 @@ class StreamingMixin(_MixinBase):
             prompt.border_title = f"{SPINNER[self.ui_state.spin_idx]} {self.ui_state.spin_label}{dbg}"
 
         timer = self.set_interval(0.08, _tick)
+        self.tab_state.streaming_tabs.add(_my_tab_id)
         prompt.add_class("streaming")
         prompt.border_title = f"{SPINNER[0]} 等待回覆"
         prompt.disabled = True
@@ -278,16 +285,28 @@ class StreamingMixin(_MixinBase):
 
         finally:
             timer.stop()
-            prompt.remove_class("streaming")
-            self._update_prompt_title()
-            prompt.disabled = False
-            prompt.reset_prediction(f"傳訊息給 {agent.display_name}...")
-            prompt.focus()
-            if self.input_state.restore_input:
-                self.input_state.restore_input = False
-                restored = self.input_state.last_send_text
-                prompt.value = restored
-                prompt.cursor_position = len(restored)
+            self.tab_state.streaming_tabs.discard(_my_tab_id)
+            # 確認用戶目前是否還在這個 tab
+            try:
+                from textual.widgets import TabbedContent as _TC2
+                _active_now = self.query_one("#center-tabs", _TC2).active or "chat"
+            except Exception:
+                _active_now = _my_tab_id
+            if _active_now == _my_tab_id:
+                prompt.remove_class("streaming")
+                self._update_prompt_title()
+                prompt.disabled = False
+                prompt.reset_prediction(f"傳訊息給 {agent.display_name}...")
+                prompt.focus()
+                if self.input_state.restore_input:
+                    self.input_state.restore_input = False
+                    restored = self.input_state.last_send_text
+                    prompt.value = restored
+                    prompt.cursor_position = len(restored)
+            else:
+                # 用戶已切換到其他 tab，prompt 狀態由 on_tabbed_content_tab_activated 管理
+                if self.input_state.restore_input:
+                    self.input_state.restore_input = False
             if ephemeral and _history_snapshot is not None:
                 new_msgs = agent.history[len(_history_snapshot):]
                 self.input_state.last_ephemeral = new_msgs if new_msgs else None

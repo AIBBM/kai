@@ -287,9 +287,39 @@ def validate_agent(data: dict[str, Any]) -> list[str]:
     return [f for f in REQUIRED_FIELDS if not data.get(f)]
 
 
+def _escape_json_strings(text: str) -> str:
+    """將 JSON 字串值內的 literal 控制字元轉為轉義序列。"""
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            result.append(ch)
+            escaped = False
+        elif ch == "\\" and in_string:
+            result.append(ch)
+            escaped = True
+        elif ch == '"':
+            result.append(ch)
+            in_string = not in_string
+        elif in_string and ch == "\n":
+            result.append("\\n")
+        elif in_string and ch == "\r":
+            result.append("\\r")
+        elif in_string and ch == "\t":
+            result.append("\\t")
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
 def extract_json(text: str) -> dict[str, Any]:
-    """從 LLM 回覆中提取 JSON（處理 markdown code block）。"""
+    """從 LLM 回覆中提取 JSON（處理 markdown code block 與字串內控制字元）。"""
     m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
     if m:
         text = m.group(1)
-    return json.loads(text.strip())
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return json.loads(_escape_json_strings(text))

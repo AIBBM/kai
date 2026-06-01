@@ -817,6 +817,16 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
                 self.session.name = self.session.tab_names.get("chat", "")
                 self._update_subtitle()
                 self._sync_cap_bar()
+        # 根據新 tab 是否正在串流，恢復或保持 prompt 鎖定狀態
+        prompt = self.query_one("#prompt", HistoryInput)
+        if tab_id in self.tab_state.streaming_tabs:
+            prompt.disabled = True
+            prompt.add_class("streaming")
+        else:
+            prompt.disabled = False
+            prompt.remove_class("streaming")
+            self._update_prompt_title()
+            prompt.focus()
 
     def on_file_tree_file_chosen(self, event: FileTree.FileChosen) -> None:
         path = event.path
