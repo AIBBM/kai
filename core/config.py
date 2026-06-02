@@ -23,6 +23,7 @@ def _apply_env(g: dict) -> None:
     """
     g["MODEL"]                = os.getenv("MODEL", "qwen3-vl:4b")
     g["CREATE_AGENT_MODEL"]   = os.getenv("CREATE_AGENT_MODEL", "")
+    g["COMPACT_MODEL"]        = os.getenv("COMPACT_MODEL", "")
     g["SEARXNG_URL"]          = os.getenv("SEARXNG_URL", "http://localhost:8888/search")
     g["NUM_CTX"]              = int(os.getenv("NUM_CTX", "0"))
     g["MAX_TOOL_CALLS"]       = int(os.getenv("MAX_TOOL_CALLS", "15"))
@@ -101,6 +102,7 @@ def current_kai_config() -> dict:
     return {
         "model":                  g["MODEL"],
         "create_agent_model":     g["CREATE_AGENT_MODEL"],
+        "compact_model":          g["COMPACT_MODEL"],
         "history_keep":           g["HISTORY_KEEP"],
         "debug_tools":            g["DEBUG_TOOLS"],
         "temperature":            g["TEMPERATURE"],
@@ -118,6 +120,10 @@ def current_kai_config() -> dict:
         "search_retries":         g["SEARCH_RETRIES"],
         "ollama_stream_timeout":  g["OLLAMA_STREAM_TIMEOUT"],
         "mcp_tool_timeout":       g["MCP_TOOL_TIMEOUT"],
+        "dify_api_url":           g["DIFY_API_URL"],
+        "dify_top_k":             g["DIFY_TOP_K"],
+        "dify_rerank_provider":   g["DIFY_RERANK_PROVIDER"],
+        "dify_rerank_model":      g["DIFY_RERANK_MODEL"],
     }
 
 
@@ -125,12 +131,15 @@ def apply_kai_config(cfg: dict) -> None:
     """將 config dict 套用到 module globals。API key 類不支援（留在 .env）。"""
     g = globals()
     _STR   = {"model": "MODEL", "create_agent_model": "CREATE_AGENT_MODEL",
-              "searxng_url": "SEARXNG_URL", "username": "USERNAME"}
+              "compact_model": "COMPACT_MODEL",
+              "searxng_url": "SEARXNG_URL", "username": "USERNAME",
+              "dify_api_url": "DIFY_API_URL", "dify_rerank_provider": "DIFY_RERANK_PROVIDER",
+              "dify_rerank_model": "DIFY_RERANK_MODEL"}
     _INT   = {"history_keep": "HISTORY_KEEP", "num_ctx": "NUM_CTX",
               "max_tool_calls": "MAX_TOOL_CALLS", "max_search_chars": "MAX_SEARCH_CHARS",
               "search_num_results": "SEARCH_NUM_RESULTS", "search_retries": "SEARCH_RETRIES",
               "bash_timeout": "BASH_TIMEOUT", "fetch_max_chars": "FETCH_MAX_CHARS",
-              "ollama_stream_timeout": "OLLAMA_STREAM_TIMEOUT"}
+              "ollama_stream_timeout": "OLLAMA_STREAM_TIMEOUT", "dify_top_k": "DIFY_TOP_K"}
     _FLOAT = {"temperature": "TEMPERATURE", "top_k": "TOP_K", "top_p": "TOP_P",
               "search_timeout": "SEARCH_TIMEOUT", "mcp_tool_timeout": "MCP_TOOL_TIMEOUT"}
     _BOOL  = {"debug_tools": "DEBUG_TOOLS"}

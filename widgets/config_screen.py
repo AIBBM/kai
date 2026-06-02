@@ -13,6 +13,8 @@ from textual.widgets import DataTable, Label
 _KEY_META: list[tuple[str, str, str]] = [
     # (key, 單位/型別, 說明)
     ("model",                 "str",   "使用的模型"),
+    ("create_agent_model",    "str",   "/create-agent 設計模型（空=同 model）"),
+    ("compact_model",         "str",   "/compact 壓縮模型（空=自動選擇）"),
     ("history_keep",          "pair",  "對話記憶保留幾個來回"),
     ("debug_tools",           "bool",  "顯示工具呼叫除錯卡片"),
     ("temperature",           "0-1",   "生成溫度（低=確定，高=創意）"),
@@ -30,11 +32,15 @@ _KEY_META: list[tuple[str, str, str]] = [
     ("search_retries",        "int",   "搜尋失敗重試次數"),
     ("ollama_stream_timeout", "秒",    "Ollama 每個 chunk 最長等待"),
     ("mcp_tool_timeout",      "秒",    "MCP 單次工具呼叫逾時"),
+    ("dify_api_url",          "url",   "Dify 伺服器位址"),
+    ("dify_top_k",            "int",   "Dify RAG 回傳段落數"),
+    ("dify_rerank_provider",  "str",   "Dify rerank 供應商（xinference）"),
+    ("dify_rerank_model",     "str",   "Dify rerank 模型名稱"),
 ]
 
 _API_KEY_HINT = (
     "API 金鑰請設定在 .env：\n"
-    "  GEMINI_API_KEY=...    DEEPSEEK_API_KEY=...    JINA_API_KEY=..."
+    "  GEMINI_API_KEY=...    DEEPSEEK_API_KEY=...    JINA_API_KEY=...    DIFY_API_KEY=..."
 )
 
 _CHECKED   = "[green]✓[/green]"
