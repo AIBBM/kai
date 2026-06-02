@@ -28,9 +28,11 @@ uv run python app.py ~/my-project   # 指定工作目錄
 | `qwen3-vl:4b` | ✓ | ✓ | ✓ | Ollama |
 | `qwen3:4b/8b` | ✓ | — | ✓ | Ollama |
 | `gemma4:e2b/e4b` | ✓ | ✓ | ✓ | Ollama |
+| `gemini-2.0-flash` | — | ✓ | ✓ | Gemini API |
 | `gemini-2.5-flash` | ✓ | ✓ | ✓ | Gemini API |
 | `gemini-2.5-pro` | ✓ | ✓ | ✓ | Gemini API |
-| `deepseek-v4-flash` | — | — | ✓ | DeepSeek API |
+| `deepseek-v4-flash` | ✓ | — | ✓ | DeepSeek API |
+| `deepseek-v4-pro` | ✓ | — | ✓ | DeepSeek API |
 
 完整清單見 `core/models.py`。
 
@@ -52,8 +54,7 @@ BASH_TIMEOUT=30             # bash 指令逾時秒數
 | `/model <name>` | 切換模型 |
 | `/nickname [名字]` | 查詢或設定目前模型暱稱 |
 | `/think` | 切換 Thinking 模式 |
-| `/clear` | 清除畫面（不歸檔） |
-| `/cls` | 清除並歸檔對話（可 `/resume` 恢復） |
+| `/clear` | 歸檔並清除對話（可 `/resume` 恢復） |
 | `/resume [N]` | 列出或載入歸檔 session |
 | `/ask <問題>` | 臨時提問，不污染對話歷史 |
 | `/save` | 將上一次 `/ask` 存入歷史 |
@@ -70,6 +71,11 @@ BASH_TIMEOUT=30             # bash 指令逾時秒數
 | `/create-agent <描述>` | 用 AI 設計新 Agent |
 | `/load-agent <name>` | 在新 tab 載入 Agent |
 | `/list-agents` | 列出所有已建立的 Agents |
+| `/delete-agent [name]` | 刪除 Agent（省略開多選面板） |
+| `/reload-agent` | 熱重載當前 Agent config（保留對話歷史） |
+| `/reload-config` | 熱重載 `.kai/config.json` 設定 |
+| `/init-config` | 互動式 ConfigScreen 匯出設定 |
+| `/tts <engine\|off>` | 切換 TTS 引擎或關閉：`edge-tts` `azure-tts` `melotts` `kokoro` `off` |
 
 ## Agent Factory
 
@@ -130,10 +136,19 @@ app.py              → Textual TUI 主程式
 core/
   agent.py          → Agent 類別：串流、工具呼叫迴圈、歷史管理
   agent_factory.py  → /create-agent 邏輯，agents/ 目錄管理
+  backends.py       → stream_ollama / stream_openai_compat
   tools.py          → web_search, fetch_urls, bash_exec
   models.py         → ModelProfile + REGISTRY
   config.py         → 環境變數常數
   mcp_client.py     → MCP server 生命週期 + 工具 dispatch
+  tts.py            → TTS 引擎抽象（edge-tts, azure-tts, melotts, kokoro）
+mixins/
+  streaming.py      → _send worker、串流回呼、TTS 播放
+  agents.py         → /create-agent, /load-agent, /list-agents, /reload-agent
+  app_tools.py      → AI 可呼叫的 app tools（切換模型、TTS、MCP…）
+  session.py        → /cd, /compact, /clear, /resume, /model 等
+  bash.py           → ! 指令執行
+  mcp.py            → /mcp-list, /mcp-add, /mcp-del, /mcp-reload
 widgets/
   input.py          → HistoryInput（歷史導航、ghost text）、ChatAutoComplete
   chat.py           → AIMessage、FileViewer、ImageBubble、CapabilityBadge

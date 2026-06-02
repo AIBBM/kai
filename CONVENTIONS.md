@@ -32,15 +32,26 @@
 ## 套件結構
 
 ```
-app.py          → TUI 入口點
+app.py          → TUI 入口點（ChatApp 組合所有 mixin）
 main.py         → CLI 入口點
 core/           → 業務邏輯（與 UI 無關）
   agent.py      → Agent, 對話歷史, 工具呼叫迴圈
+  agent_factory.py → /create-agent 邏輯，agents/ 目錄管理
+  app_state.py  → InputState, SessionState, UIState, TabState
+  backends.py   → stream_ollama / stream_openai_compat
   config.py     → 所有 env-var 常數
   models.py     → ModelProfile dataclass + REGISTRY
   tools.py      → web_search, bash_exec, run_tool
   mcp_client.py → MCP server 生命週期 + 工具呼叫
+  tts.py        → TTS 引擎抽象（edge-tts, azure-tts, melotts, kokoro）
   file_picker.py→ prompt_toolkit 圖片選擇器（legacy CLI 用）
+mixins/         → ChatApp 行為拆分（全部繼承 _MixinBase = ChatApp）
+  streaming.py  → _send worker、串流回呼、TTS 播放
+  agents.py     → /create-agent, /load-agent, /list-agents, /reload-agent
+  app_tools.py  → AI 可呼叫的 app tools
+  bash.py       → ! 指令執行
+  mcp.py        → /mcp-list, /mcp-add, /mcp-del, /mcp-reload
+  session.py    → /cd, /compact, /clear, /resume, /model 等
 widgets/        → Textual TUI 元件
   input.py      → HistoryInput, ChatAutoComplete
   tree.py       → RightClickTree, TreeContextMenu, FileTree

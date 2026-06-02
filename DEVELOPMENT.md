@@ -211,12 +211,19 @@ msg.tool_calls = [
 
 ---
 
-## TUI 架構（`app.py` + `widgets/`）
+## TUI 架構（`app.py` + `mixins/` + `widgets/`）
 
-CLI 版（`main.py`）之外，`app.py` 是 Textual TUI 的入口點。TUI 元件拆分到 `widgets/` 套件：
+CLI 版（`main.py`）之外，`app.py` 是 Textual TUI 的入口點。ChatApp 的行為透過 mixin 拆分：
 
 ```
-app.py          ChatApp（主 App，事件處理，slash commands，_send，_run_bash）
+app.py          ChatApp（組合所有 mixin；事件處理、tab 管理、layout）
+mixins/
+  streaming.py  _send worker（@work exclusive）、串流回呼、TTS 播放
+  agents.py     /create-agent, /load-agent, /list-agents, /reload-agent, /delete-agent
+  app_tools.py  17 個 AI 可呼叫的 app tools（切換模型、TTS、MCP…）
+  bash.py       ! 指令執行、!cd 攔截
+  mcp.py        /mcp-list, /mcp-add, /mcp-del, /mcp-reload
+  session.py    /cd, /compact, /clear, /resume, /model, /nickname, /reload-config…
 widgets/
   input.py      HistoryInput（Up/Down 歷史、Ctrl+Z undo、多行貼上）
                 ChatAutoComplete（斜線指令、路徑補全）
@@ -225,16 +232,27 @@ widgets/
                 TreeContextMenu（右鍵選單 ModalScreen）
   sidebar.py    Sidebar（cwd、模型、git、MCP 工具）
                 ResizeHandle（拖拉分隔條）
-  chat.py       AIMessage（Markdown 渲染 + 右鍵選取模式）
-                FileViewer（唯讀 TextArea，Ctrl+C WSL 多行複製）
+  chat.py       AIMessage（Markdown 渲染）
+                FileViewer（TextArea，Ctrl+C WSL 多行複製）
                 ImageBubble（圖片訊息卡片）
-                CopyButton（程式碼區塊複製按鈕）
                 CapabilityBadge / CapLabel（Think / vision 標籤）
   commands.py   ChatCommands（Ctrl+P 命令面板）
   utils.py      _copy_to_clipboard（xclip / clip.exe）
                 _file_icon（extension → emoji）
-                _line_height、_open_image 等 TUI 共用工具
+                _line_height 等 TUI 共用工具
 ```
+
+### Tab 輸入狀態隔離（`streaming_tabs`）
+
+`#prompt` 是全域唯一的 widget，不屬於任何 tab。當 sub-agent tab 串流時，`_send` 會把它 `disabled = True`，若此時切換到 main tab，prompt 仍然鎖住。
+
+解法：`TabState.streaming_tabs: set[str]` 記錄哪些 tab_id 正在串流。
+
+- `_send` 開始時：`streaming_tabs.add(my_tab_id)`
+- `_send` 結束時（finally）：`streaming_tabs.discard(my_tab_id)`；只有用戶還在同一個 tab 才恢復 prompt
+- `on_tabbed_content_tab_activated`：切換後查 `streaming_tabs`，決定 `prompt.disabled`
+
+**不要**在 `finally` 裡無條件恢復 prompt——此時用戶可能已在另一個 tab，應該由 tab 切換事件負責狀態還原。
 
 ### MCP 生命週期
 
