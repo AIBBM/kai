@@ -294,6 +294,11 @@ class AppToolsMixin(_MixinBase):
                         "description":   {"type": "string", "description": "一行說明這個 agent 的用途"},
                         "greeting":      {"type": "string", "description": "首次對話時 AI 主動開場的 prompt，可省略"},
                         "global_scope":  {"type": "boolean", "description": "true = 存到 ~/.kai/agents/（跨專案）；false = 存到 cwd/agents/（預設）"},
+                        "datasets": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Dify 知識庫 UUID 列表。design_system_prompt 回傳有 datasets 時填入，否則省略。",
+                        },
                         "tts": {
                             "type": "object",
                             "description": (
@@ -401,8 +406,9 @@ class AppToolsMixin(_MixinBase):
         import core.config as _cfg
         design_model = _cfg.CREATE_AGENT_MODEL or _cfg.MODEL
         self.notify(f"設計 system prompt 中…（{design_model}）", timeout=30)
-        system_prompt, greeting = await call_design_model(name, description)
-        return json.dumps({"system_prompt": system_prompt, "greeting": greeting}, ensure_ascii=False)
+        system_prompt, greeting, extras = await call_design_model(name, description)
+        result = {"system_prompt": system_prompt, "greeting": greeting, **extras}
+        return json.dumps(result, ensure_ascii=False)
 
     async def _app_list_agents(self) -> str:
         from core.agent_factory import list_agents
@@ -427,6 +433,7 @@ class AppToolsMixin(_MixinBase):
         greeting: str = "",
         global_scope: bool = False,
         tts: "dict | None" = None,
+        datasets: "list | None" = None,
     ) -> str:
         from core.agent_factory import save_agent, validate_agent
         from widgets.tree import FileTree
@@ -442,6 +449,8 @@ class AppToolsMixin(_MixinBase):
         }
         if tts:
             data["tts"] = tts
+        if datasets:
+            data["datasets"] = datasets
         missing = validate_agent(data)
         if missing:
             return f"缺少必要欄位：{missing}"

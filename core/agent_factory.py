@@ -10,26 +10,37 @@ REQUIRED_FIELDS = {"name", "model", "system_prompt"}
 
 GLOBAL_AGENTS_DIR = Path.home() / ".kai" / "agents"
 
+_CONDITIONAL_FIELDS = """\
+條件欄位（符合才加入，否則省略）：
+- 若用途涉及查詢知識庫、文件庫、RAG、內部資料：
+    加入 "datasets": []
+    system_prompt 內加入："## 可用知識庫\n\n{{DIFY_DATASETS}}\n"（系統啟動時自動替換為 KB 清單）
+    system_prompt 說明必須優先用 dify_retrieve 工具查詢、回答引用來源文件
+- 若用途涉及語音輸出、朗讀、TTS：
+    加入 "tts": {{"engine": "edge-tts", "voice": "zh-TW-HsiaoChenNeural", "player": "ffplay", "speed": 1.0}}
+    中文女聲：zh-TW-HsiaoChenNeural，中文男聲：zh-TW-YunJheNeural，英文：en-US-AriaNeural
+"""
+
 DESIGN_SYSTEM_PROMPT = """\
 你是一個 AI agent 設計師。根據以下資訊，為 agent 設計 system prompt 和開場白。
 
-Agent 名稱：{name}
-用途描述：{description}
+Agent 名稱：{{name}}
+用途描述：{{description}}
 
 請輸出 JSON（不要加任何說明文字，只輸出 JSON）：
 
 {{
   "system_prompt": "完整的 system prompt，包含角色定義、專業知識、行為規範、回覆風格",
-  "greeting": "開場白觸發 prompt，例如：「請以你的角色主動打招呼，介紹你自己和你能提供的幫助」"
+  "greeting": "開場白觸發 prompt"
 }}
 
 設計原則：
 - system_prompt 要具體、有深度，包含專業術語和邊界條件
 - system_prompt 需涵蓋角色定義、核心能力、回答風格、限制範圍
-"""
 
+""" + _CONDITIONAL_FIELDS
 
-DESIGN_FULL_PROMPT = """\
+_DESIGN_BASE = """\
 你是一個 AI agent 設計師。根據用戶的描述，設計一個完整的 AI agent 設定。
 
 用戶描述：{description}
@@ -43,7 +54,7 @@ DESIGN_FULL_PROMPT = """\
   "nickname": "簡短暱稱（2-4字，用於 UI 顯示）",
   "model": "選擇最適合的模型名稱",
   "system_prompt": "完整的 system prompt，包含角色定義、專業知識、行為規範、回覆風格",
-  "greeting": "開場白觸發 prompt，例如：「請以你的角色主動打招呼，介紹你自己和你能提供的幫助」",
+  "greeting": "開場白觸發 prompt",
   "description": "一句話說明這個 agent 的用途",
   "mcp_servers": {{}},
   "history_keep": 15
@@ -55,11 +66,10 @@ DESIGN_FULL_PROMPT = """\
 - model 選擇依任務性質：需要思考選 gemini-2.5-flash，純對話選 deepseek-v4-flash，需視覺選 qwen3-vl:4b
 - mcp_servers 保持空物件（用戶可自行擴充）
 - history_keep 依任務複雜度調整（10-30）
-- 若描述中有「語音」「朗讀」「TTS」「說話」，在 JSON 最後加入：
-  "tts": {{"engine": "edge-tts", "voice": "zh-TW-HsiaoChenNeural", "player": "ffplay", "speed": 1.0}}
-  中文 voice：zh-TW-HsiaoChenNeural（女）/ zh-TW-YunJheNeural（男）；英文：en-US-AriaNeural
-  否則整個 tts 欄位省略
-"""
+
+""" + _CONDITIONAL_FIELDS
+
+DESIGN_FULL_PROMPT = _DESIGN_BASE
 
 
 async def _call_backend(design_model: str, messages: list[dict]) -> str:
@@ -91,7 +101,7 @@ async def call_full_design(description: str) -> dict[str, Any]:
     from core.models import REGISTRY
     design_model = _cfg.CREATE_AGENT_MODEL or _cfg.MODEL
     model_list = ", ".join(REGISTRY.keys())
-    prompt = DESIGN_FULL_PROMPT.format(description=description, models=model_list)
+    prompt = _DESIGN_BASE.format(description=description, models=model_list)
     raw = await _call_backend(design_model, [{"role": "user", "content": prompt}])
     try:
         return extract_json(raw)
@@ -99,8 +109,10 @@ async def call_full_design(description: str) -> dict[str, Any]:
         raise ValueError(f"設計模型回傳非 JSON 格式：{e}\n原始回覆：{raw[:300]}") from e
 
 
-async def call_design_model(name: str, description: str) -> tuple[str, str]:
-    """用 CREATE_AGENT_MODEL 生成 system_prompt 和 greeting，回傳 (system_prompt, greeting)。"""
+async def call_design_model(name: str, description: str) -> tuple[str, str, dict]:
+    """用 CREATE_AGENT_MODEL 生成 agent 設定，回傳 (system_prompt, greeting, extras)。
+    extras 可能包含 datasets、tts 等 LLM 自行判斷需要的條件欄位。
+    """
     import core.config as _cfg
     design_model = _cfg.CREATE_AGENT_MODEL or _cfg.MODEL
     prompt = DESIGN_SYSTEM_PROMPT.format(name=name, description=description or name)
@@ -109,7 +121,8 @@ async def call_design_model(name: str, description: str) -> tuple[str, str]:
         data = extract_json(raw)
     except json.JSONDecodeError as e:
         raise ValueError(f"設計模型回傳非 JSON 格式：{e}\n原始回覆：{raw[:300]}") from e
-    return data.get("system_prompt", ""), data.get("greeting", "")
+    extras = {k: data[k] for k in ("datasets", "tts") if k in data}
+    return data.get("system_prompt", ""), data.get("greeting", ""), extras
 
 
 def _slugify(name: str) -> str:
