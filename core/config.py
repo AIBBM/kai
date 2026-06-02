@@ -44,8 +44,13 @@ def _apply_env(g: dict) -> None:
     g["DEEPSEEK_API_KEY"]     = os.getenv("DEEPSEEK_API_KEY", "")
     g["JINA_API_KEY"]         = os.getenv("JINA_API_KEY", "")
     g["AZURE_TTS_KEY"]        = os.getenv("AZURE_TTS_KEY", "")
-    g["AZURE_TTS_REGION"]     = os.getenv("AZURE_TTS_REGION", "")
-    g["AZURE_TTS_ENDPOINT"]   = os.getenv("AZURE_TTS_ENDPOINT", "")  # 可選，覆蓋 region 推斷的 endpoint
+    g["AZURE_TTS_REGION"]      = os.getenv("AZURE_TTS_REGION", "")
+    g["AZURE_TTS_ENDPOINT"]    = os.getenv("AZURE_TTS_ENDPOINT", "")  # 可選，覆蓋 region 推斷的 endpoint
+    g["DIFY_API_URL"]          = os.getenv("DIFY_API_URL", "http://localhost")
+    g["DIFY_API_KEY"]          = os.getenv("DIFY_API_KEY", "")
+    g["DIFY_TOP_K"]            = int(os.getenv("DIFY_TOP_K", "5"))
+    g["DIFY_RERANK_PROVIDER"]  = os.getenv("DIFY_RERANK_PROVIDER", "xinference")
+    g["DIFY_RERANK_MODEL"]     = os.getenv("DIFY_RERANK_MODEL", "")
 
 
 _apply_env(globals())

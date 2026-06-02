@@ -23,10 +23,12 @@ from .models import ModelProfile, get_profile
 from .tool_log import log_tool_call, log_turn_start
 from .tools import (
     BASH_TOOL,
+    DIFY_RETRIEVE_TOOL,
     FETCH_URLS_TOOL,
     OPEN_AGENT_TOOL,
     SEARCH_TOOL,
     bash_exec,
+    dify_retrieve,
     fetch_urls,
     run_tool,
     web_search,
@@ -47,7 +49,9 @@ class Agent:
             "web_search": web_search,
             "fetch_urls": fetch_urls,
             "bash_exec": bash_exec,
+            "dify_retrieve": dify_retrieve,
         }
+        self.datasets: list[str] = []  # 此 agent 可查的 Dify KB ID 清單（空 = 不啟用 RAG）
         # app-level tools（由 ChatApp._inject_app_tools 注入，只有 main agent 有）
         self.extra_tools: list[dict] = []
         self.extra_tools_map: dict = {}
@@ -383,6 +387,8 @@ class Agent:
             active_tools.extend([SEARCH_TOOL, FETCH_URLS_TOOL, BASH_TOOL])
             if "open_agent" in self.tools_map:
                 active_tools.append(OPEN_AGENT_TOOL)
+            if _cfg.DIFY_API_KEY and self.datasets:
+                active_tools.append(DIFY_RETRIEVE_TOOL)
         if self.profile.supports_tools and self.mcp_client:
             active_tools.extend(self.mcp_client.tools)
         if self.profile.supports_tools and self.extra_tools:
