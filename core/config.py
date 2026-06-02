@@ -18,40 +18,22 @@ BUNDLED_MCP_FILE = _KAI_PKG_DIR / "mcp_servers.json"
 
 
 def _apply_env(g: dict) -> None:
-    """將環境變數套用到目標 globals dict。模組初始化與 reload_env 共用，避免重複定義預設值。
-    新增 env var 只需在這裡加一行，兩個呼叫點都會生效。
+    """從 REGISTRY 讀取環境變數並套用到 globals。
+    新增設定只需在 core/config_registry.py 加一筆 ConfigEntry。
     """
-    g["MODEL"]                = os.getenv("MODEL", "qwen3-vl:4b")
-    g["CREATE_AGENT_MODEL"]   = os.getenv("CREATE_AGENT_MODEL", "")
-    g["COMPACT_MODEL"]        = os.getenv("COMPACT_MODEL", "")
-    g["SEARXNG_URL"]          = os.getenv("SEARXNG_URL", "http://localhost:8888/search")
-    g["NUM_CTX"]              = int(os.getenv("NUM_CTX", "0"))
-    g["MAX_TOOL_CALLS"]       = int(os.getenv("MAX_TOOL_CALLS", "15"))
-    g["MAX_SEARCH_CHARS"]     = int(os.getenv("MAX_SEARCH_CHARS", "8000"))
-    g["SEARCH_NUM_RESULTS"]   = int(os.getenv("SEARCH_NUM_RESULTS", "5"))
-    g["SEARCH_TIMEOUT"]       = float(os.getenv("SEARCH_TIMEOUT", "8.0"))
-    g["SEARCH_RETRIES"]       = int(os.getenv("SEARCH_RETRIES", "2"))
-    g["HISTORY_KEEP"]         = int(os.getenv("HISTORY_KEEP", "10"))
-    g["USERNAME"]             = os.getenv("USERNAME", "你")
-    g["BASH_TIMEOUT"]         = int(os.getenv("BASH_TIMEOUT", "30"))
-    g["TEMPERATURE"]          = float(os.getenv("TEMPERATURE", "0.6"))
-    g["TOP_K"]                = int(os.getenv("TOP_K", "20"))
-    g["TOP_P"]                = float(os.getenv("TOP_P", "0.95"))
-    g["FETCH_MAX_CHARS"]      = int(os.getenv("FETCH_MAX_CHARS", "12000"))
-    g["OLLAMA_STREAM_TIMEOUT"]= int(os.getenv("OLLAMA_STREAM_TIMEOUT", "120"))
-    g["MCP_TOOL_TIMEOUT"]     = float(os.getenv("MCP_TOOL_TIMEOUT", "60.0"))
-    g["DEBUG_TOOLS"]          = os.getenv("DEBUG_TOOLS", "0").strip().lower() in ("1", "true", "yes")
-    g["GEMINI_API_KEY"]       = os.getenv("GEMINI_API_KEY", "")
-    g["DEEPSEEK_API_KEY"]     = os.getenv("DEEPSEEK_API_KEY", "")
-    g["JINA_API_KEY"]         = os.getenv("JINA_API_KEY", "")
-    g["AZURE_TTS_KEY"]        = os.getenv("AZURE_TTS_KEY", "")
-    g["AZURE_TTS_REGION"]      = os.getenv("AZURE_TTS_REGION", "")
-    g["AZURE_TTS_ENDPOINT"]    = os.getenv("AZURE_TTS_ENDPOINT", "")  # 可選，覆蓋 region 推斷的 endpoint
-    g["DIFY_API_URL"]          = os.getenv("DIFY_API_URL", "http://localhost")
-    g["DIFY_API_KEY"]          = os.getenv("DIFY_API_KEY", "")
-    g["DIFY_TOP_K"]            = int(os.getenv("DIFY_TOP_K", "5"))
-    g["DIFY_RERANK_PROVIDER"]  = os.getenv("DIFY_RERANK_PROVIDER", "xinference")
-    g["DIFY_RERANK_MODEL"]     = os.getenv("DIFY_RERANK_MODEL", "")
+    from .config_registry import REGISTRY
+    for entry in REGISTRY:
+        raw = os.getenv(entry.env)
+        if raw is None:
+            g[entry.env] = entry.default
+        elif entry.type is bool:
+            g[entry.env] = raw.strip().lower() in ("1", "true", "yes")
+        elif entry.type is int:
+            g[entry.env] = int(raw)
+        elif entry.type is float:
+            g[entry.env] = float(raw)
+        else:
+            g[entry.env] = raw
 
 
 _apply_env(globals())
@@ -76,7 +58,7 @@ def ensure_kai_dir() -> Path:
 
 
 def reload_env() -> None:
-    """重新讀取 .env 並更新 module globals（支援 /reload-config 熱套用 .env 變更）。"""
+    """重新讀取 .env 並更新 module globals（支援 /reload-config 熱套用）。"""
     load_dotenv(override=True)
     _apply_env(globals())
 
@@ -92,71 +74,37 @@ def load_kai_config() -> dict:
             return {}
 
     global_cfg = _read(Path.home() / ".kai" / "config.json")
-    local_cfg = _read(Path(".kai") / "config.json")
+    local_cfg  = _read(Path(".kai") / "config.json")
     return {**global_cfg, **local_cfg}
 
 
 def current_kai_config() -> dict:
-    """回傳目前所有生效的 config 值（可寫入 config.json 的 key）。"""
+    """回傳目前所有生效的 config 傀（可寫入 config.json 的 key）。"""
+    from .config_registry import REGISTRY
     g = globals()
-    return {
-        "model":                  g["MODEL"],
-        "create_agent_model":     g["CREATE_AGENT_MODEL"],
-        "compact_model":          g["COMPACT_MODEL"],
-        "history_keep":           g["HISTORY_KEEP"],
-        "debug_tools":            g["DEBUG_TOOLS"],
-        "temperature":            g["TEMPERATURE"],
-        "num_ctx":                g["NUM_CTX"],
-        "top_k":                  g["TOP_K"],
-        "top_p":                  g["TOP_P"],
-        "max_tool_calls":         g["MAX_TOOL_CALLS"],
-        "bash_timeout":           g["BASH_TIMEOUT"],
-        "username":               g["USERNAME"],
-        "searxng_url":            g["SEARXNG_URL"],
-        "fetch_max_chars":        g["FETCH_MAX_CHARS"],
-        "max_search_chars":       g["MAX_SEARCH_CHARS"],
-        "search_num_results":     g["SEARCH_NUM_RESULTS"],
-        "search_timeout":         g["SEARCH_TIMEOUT"],
-        "search_retries":         g["SEARCH_RETRIES"],
-        "ollama_stream_timeout":  g["OLLAMA_STREAM_TIMEOUT"],
-        "mcp_tool_timeout":       g["MCP_TOOL_TIMEOUT"],
-        "dify_api_url":           g["DIFY_API_URL"],
-        "dify_top_k":             g["DIFY_TOP_K"],
-        "dify_rerank_provider":   g["DIFY_RERANK_PROVIDER"],
-        "dify_rerank_model":      g["DIFY_RERANK_MODEL"],
-    }
+    return {e.key: g[e.env] for e in REGISTRY if not e.api_key}
 
 
 def apply_kai_config(cfg: dict) -> None:
     """將 config dict 套用到 module globals。API key 類不支援（留在 .env）。"""
+    from .config_registry import REGISTRY
     g = globals()
-    _STR   = {"model": "MODEL", "create_agent_model": "CREATE_AGENT_MODEL",
-              "compact_model": "COMPACT_MODEL",
-              "searxng_url": "SEARXNG_URL", "username": "USERNAME",
-              "dify_api_url": "DIFY_API_URL", "dify_rerank_provider": "DIFY_RERANK_PROVIDER",
-              "dify_rerank_model": "DIFY_RERANK_MODEL"}
-    _INT   = {"history_keep": "HISTORY_KEEP", "num_ctx": "NUM_CTX",
-              "max_tool_calls": "MAX_TOOL_CALLS", "max_search_chars": "MAX_SEARCH_CHARS",
-              "search_num_results": "SEARCH_NUM_RESULTS", "search_retries": "SEARCH_RETRIES",
-              "bash_timeout": "BASH_TIMEOUT", "fetch_max_chars": "FETCH_MAX_CHARS",
-              "ollama_stream_timeout": "OLLAMA_STREAM_TIMEOUT", "dify_top_k": "DIFY_TOP_K"}
-    _FLOAT = {"temperature": "TEMPERATURE", "top_k": "TOP_K", "top_p": "TOP_P",
-              "search_timeout": "SEARCH_TIMEOUT", "mcp_tool_timeout": "MCP_TOOL_TIMEOUT"}
-    _BOOL  = {"debug_tools": "DEBUG_TOOLS"}
-    for key, attr in _STR.items():
-        if key in cfg:
-            g[attr] = str(cfg[key])
-    for key, attr in _INT.items():
-        if key in cfg:
-            g[attr] = int(cfg[key])
-    for key, attr in _FLOAT.items():
-        if key in cfg:
-            g[attr] = float(cfg[key])
-    for key, attr in _BOOL.items():
-        if key in cfg:
-            v = cfg[key]
-            g[attr] = bool(v) if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes")
+    key_map = {e.key: e for e in REGISTRY if not e.api_key}
+    for key, val in cfg.items():
+        if key not in key_map:
+            continue
+        entry = key_map[key]
+        if entry.type is bool:
+            g[entry.env] = bool(val) if isinstance(val, bool) else str(val).lower() in ("1", "true", "yes")
+        elif entry.type is int:
+            g[entry.env] = int(val)
+        elif entry.type is float:
+            g[entry.env] = float(val)
+        else:
+            g[entry.env] = str(val)
 
+
+# 只輸出
 # 只輸出 DEBUG 以上的 log 到 stderr，不干擾 stdout 的對話輸出
 logger.remove()
 logger.add(

@@ -10,37 +10,15 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Label
 
+from core.config_registry import REGISTRY as _CFG_REGISTRY
+
 _KEY_META: list[tuple[str, str, str]] = [
-    # (key, 單位/型別, 說明)
-    ("model",                 "str",   "使用的模型"),
-    ("create_agent_model",    "str",   "/create-agent 設計模型（空=同 model）"),
-    ("compact_model",         "str",   "/compact 壓縮模型（空=自動選擇）"),
-    ("history_keep",          "pair",  "對話記憶保留幾個來回"),
-    ("debug_tools",           "bool",  "顯示工具呼叫除錯卡片"),
-    ("temperature",           "0-1",   "生成溫度（低=確定，高=創意）"),
-    ("num_ctx",               "int",   "Context window 大小（0=模型預設）"),
-    ("top_k",                 "int",   "Top-K 採樣（0=停用）"),
-    ("top_p",                 "0-1",   "Nucleus sampling"),
-    ("max_tool_calls",        "int",   "每輪工具呼叫上限"),
-    ("bash_timeout",          "秒",    "bash_exec 指令逾時"),
-    ("username",              "str",   "對話中顯示的使用者名稱"),
-    ("searxng_url",           "url",   "SearXNG 搜尋 API 位址"),
-    ("fetch_max_chars",       "字元",  "fetch_url 單頁回傳上限"),
-    ("max_search_chars",      "字元",  "搜尋結果總字元上限"),
-    ("search_num_results",    "int",   "每次搜尋回傳筆數"),
-    ("search_timeout",        "秒",    "搜尋請求逾時"),
-    ("search_retries",        "int",   "搜尋失敗重試次數"),
-    ("ollama_stream_timeout", "秒",    "Ollama 每個 chunk 最長等待"),
-    ("mcp_tool_timeout",      "秒",    "MCP 單次工具呼叫逾時"),
-    ("dify_api_url",          "url",   "Dify 伺服器位址"),
-    ("dify_top_k",            "int",   "Dify RAG 回傳段落數"),
-    ("dify_rerank_provider",  "str",   "Dify rerank 供應商（xinference）"),
-    ("dify_rerank_model",     "str",   "Dify rerank 模型名稱"),
+    (e.key, e.unit, e.desc) for e in _CFG_REGISTRY if not e.api_key
 ]
 
 _API_KEY_HINT = (
-    "API 金鑰請設定在 .env：\n"
-    "  GEMINI_API_KEY=...    DEEPSEEK_API_KEY=...    JINA_API_KEY=...    DIFY_API_KEY=..."
+    "API 金鑰請設定在 .env：\n  "
+    + "    ".join(f"{e.env}=..." for e in _CFG_REGISTRY if e.api_key)
 )
 
 _CHECKED   = "[green]✓[/green]"
@@ -110,13 +88,12 @@ class ConfigScreen(ModalScreen[None]):
 
     def on_mount(self) -> None:
         dt = self.query_one("#config-table", DataTable)
-        (self._col_check, *_) = dt.add_columns("", "key", "目前值", "單位", "說明")
+        (self._col_check, *_) = dt.add_columns("", "key", "目前傀", "單位", "說明")
         for key, unit, desc in _KEY_META:
             val = self._values.get(key, "—")
             dt.add_row(self._mark(key), key, str(val), unit, desc, key=key)
         dt.focus()
 
-    # ------------------------------------------------------------------
     def _mark(self, key: str) -> str:
         return _CHECKED if key in self._selected else _UNCHECKED
 
@@ -124,7 +101,6 @@ class ConfigScreen(ModalScreen[None]):
         dt = self.query_one("#config-table", DataTable)
         dt.update_cell(key, self._col_check, self._mark(key), update_width=False)
 
-    # ------------------------------------------------------------------
     def action_toggle_row(self) -> None:
         dt = self.query_one("#config-table", DataTable)
         idx = dt.cursor_row
@@ -143,7 +119,6 @@ class ConfigScreen(ModalScreen[None]):
         for key, _, _ in _KEY_META:
             self._refresh_row(key)
 
-    # ------------------------------------------------------------------
     def _export(self, path: Path, label: str) -> None:
         cfg = {k: v for k, v in self._values.items() if k in self._selected}
         if not cfg:
