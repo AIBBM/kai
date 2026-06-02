@@ -131,7 +131,7 @@ widgets/
 | `/reload-agent` | Re-read `config.json` and hot-swap system prompt, model, nickname, tts in running agent |
 | `/reload-config` | Re-read `.kai/config.json` and apply all settings to the running process |
 | `/init-config` | Open interactive ConfigScreen: select keys, L→`cwd/.kai/config.json`, G→`~/.kai/config.json` |
-| `/tts <engine\|off>` | Switch TTS engine or disable: `edge-tts`, `melotts`, `kokoro-api`, `kokoro`, `off` (in-memory only; does not persist to config.json) |
+| `/tts <engine\|off>` | Switch TTS engine or disable: `edge-tts`, `melotts`, `kokoro-api`, `kokoro`, `azure-tts`, `off` (in-memory only; does not persist to config.json) |
 
 ### `!` bash commands
 
@@ -313,13 +313,16 @@ Each agent directory contains a `config.json`. All fields:
 
 | 欄位 | 預設 | 說明 |
 |------|------|------|
-| `engine` | `"edge-tts"` | `"edge-tts"` / `"melotts"` / `"kokoro-api"` / `"kokoro"` |
+| `engine` | `"edge-tts"` | `"edge-tts"` / `"melotts"` / `"kokoro-api"` / `"kokoro"` / `"azure-tts"` |
 | `voice` | 依 engine | 見下方 voice 表 |
 | `lang` | `"en-us"` | 見下方 lang 表 |
 | `player` | `"auto"` | `"auto"` / `"mpg123"` / `"paplay"` / `"ffplay"` / `"mpv"` |
-| `host` | `"localhost"` | Docker server 位址 |
+| `host` | `"localhost"` | Docker server 位址（melotts / kokoro-api 用） |
 | `port` | 8886 | melotts=8886，kokoro-api=8885 |
 | `speed` | `1.0` | 語速倍率 |
+| `key` | `""` | Azure TTS subscription key（azure-tts 用） |
+| `region` | `""` | Azure region，例如 `"eastasia"`（azure-tts 用） |
+| `endpoint` | `""` | 自訂 Azure endpoint（覆蓋 region 推斷，azure-tts 用） |
 
 **voice / lang 對照表：**
 
@@ -329,6 +332,7 @@ Each agent directory contains a `config.json`. All fields:
 | `melotts` | `"EN-US"` `"EN-BR"` `"EN-AU"` `"ZH"` | `"en"` `"zh"` `"fr"` `"jp"` |
 | `kokoro-api` | `"af_bella"` `"af_sky"` `"am_adam"` | `"en-us"` |
 | `kokoro` | `"af_sky"` `"af_bella"` | `"en-us"` `"en-gb"` |
+| `azure-tts` | `"zh-TW-HsiaoChenNeural"` `"en-US-AriaNeural"` | 不需填 |
 
 **`player` 自動選擇邏輯（`"auto"`）：**
 
@@ -376,6 +380,7 @@ Disabled servers use a `_` prefix in `mcp_servers.json` (e.g. `_playwright`, `_t
 |----------|---------|-------------|
 | `MODEL` | `qwen3-vl:4b` | Active model |
 | `CREATE_AGENT_MODEL` | `""` | Model used for `/create-agent` design step (empty = same as MODEL) |
+| `COMPACT_MODEL` | `""` | Model used for `/compact` history compression (empty = auto-select) |
 | `DEBUG_TOOLS` | `0` | Set `1` to enable tool debug cards in UI + append to `tool_calls.log` |
 | `NUM_CTX` | `0` | Context window override (0 = model default) |
 | `MAX_TOOL_CALLS` | `15` | Max tool calls per turn |
@@ -393,6 +398,14 @@ Disabled servers use a `_` prefix in `mcp_servers.json` (e.g. `_playwright`, `_t
 | `GEMINI_API_KEY` | — | Google Gemini API key |
 | `DEEPSEEK_API_KEY` | — | DeepSeek API key |
 | `CONTEXT7_API_KEY` | — | Context7 MCP API key |
+| `AZURE_TTS_KEY` | `""` | Azure TTS subscription key |
+| `AZURE_TTS_REGION` | `""` | Azure region，例如 `eastasia` |
+| `AZURE_TTS_ENDPOINT` | `""` | 自訂 Azure TTS endpoint（覆蓋 region 推斷） |
+| `DIFY_API_URL` | `"http://localhost"` | Dify server URL |
+| `DIFY_API_KEY` | — | Dify Knowledge Base API key（金鑰，只放 `.env`） |
+| `DIFY_TOP_K` | `5` | Number of chunks returned per RAG query |
+| `DIFY_RERANK_PROVIDER` | `"xinference"` | Rerank model provider name in Dify |
+| `DIFY_RERANK_MODEL` | `""` | Rerank model name (empty = reranking disabled) |
 
 Config priority (highest → lowest): `cwd/.kai/config.json` > `~/.kai/config.json` > `.env` > code defaults. Use `/init-config` to export current values and `/reload-config` to hot-apply changes. Only put API keys in `.env`; all other tuning belongs in `.kai/config.json`. Change hardcoded defaults in `core/config.py`; per-model context windows in `core/models.py`.
 
