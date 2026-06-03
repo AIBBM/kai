@@ -73,8 +73,9 @@ class SessionMixin(_MixinBase):
     async def action_init_config(self, arg: str) -> None:
         """開啟互動式 config 面板（選取 key 後按 L/G 匯出）。"""
         from widgets.config_screen import ConfigScreen
+        from core.config import config_sources
         cfg = current_kai_config()
-        await self.push_screen(ConfigScreen(cfg))
+        await self.push_screen(ConfigScreen(cfg, config_sources()))
 
     async def action_reload_config(self) -> None:
         """重新載入 .kai/config.json 並套用所有設定。"""

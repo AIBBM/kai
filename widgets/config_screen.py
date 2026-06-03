@@ -70,9 +70,10 @@ class ConfigScreen(ModalScreen[None]):
     }
     """
 
-    def __init__(self, values: dict) -> None:
+    def __init__(self, values: dict, sources: "dict[str, str] | None" = None) -> None:
         super().__init__()
         self._values = values
+        self._sources = sources or {}
         self._selected: set[str] = {key for key, _, _ in _KEY_META}
         self._col_check: object = None
 
@@ -88,10 +89,12 @@ class ConfigScreen(ModalScreen[None]):
 
     def on_mount(self) -> None:
         dt = self.query_one("#config-table", DataTable)
-        (self._col_check, *_) = dt.add_columns("", "key", "目前傀", "單位", "說明")
+        (self._col_check, *_) = dt.add_columns("", "key", "目前傀", "單位", "來源", "說明")
         for key, unit, desc in _KEY_META:
             val = self._values.get(key, "—")
-            dt.add_row(self._mark(key), key, str(val), unit, desc, key=key)
+            src = self._sources.get(key, ".env")
+            src_label = {"local": "[green]local[/green]", "global": "[yellow]global[/yellow]"}.get(src, "[dim].env[/dim]")
+            dt.add_row(self._mark(key), key, str(val), unit, src_label, desc, key=key)
         dt.focus()
 
     def _mark(self, key: str) -> str:

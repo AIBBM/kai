@@ -78,6 +78,39 @@ def load_kai_config() -> dict:
     return {**global_cfg, **local_cfg}
 
 
+def config_sources() -> dict[str, str]:
+    """回傳每個 config key 的讀取來源：'local' / 'global' / '.env'。"""
+    from .config_registry import REGISTRY
+    g = globals()
+
+    def _read(path: Path) -> dict:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    local  = _read(Path(".kai") / "config.json")
+    global_ = _read(Path.home() / ".kai" / "config.json")
+
+    sources: dict[str, str] = {}
+    for entry in REGISTRY:
+        if entry.api_key:
+            continue
+        current = g[entry.env]
+        def _matches(raw: object) -> bool:
+            try:
+                return entry.type(raw) == current
+            except (ValueError, TypeError):
+                return False
+        if entry.key in local and _matches(local[entry.key]):
+            sources[entry.key] = "local"
+        elif entry.key in global_ and _matches(global_[entry.key]):
+            sources[entry.key] = "global"
+        else:
+            sources[entry.key] = ".env"
+    return sources
+
+
 def current_kai_config() -> dict:
     """回傳目前所有生效的 config 傀（可寫入 config.json 的 key）。"""
     from .config_registry import REGISTRY
