@@ -220,6 +220,27 @@ AIMessage.select-mode .ta-view {
     color: $error;
 }
 
+.fence-btns {
+    dock: right;
+    width: auto;
+    height: 1;
+    background: transparent;
+}
+
+.mermaid-btn {
+    width: 12;
+    height: 1;
+    background: $primary 20%;
+    color: $primary;
+    border: none;
+    padding: 0 1;
+}
+
+.mermaid-btn:hover {
+    background: $primary 50%;
+    color: $text;
+}
+
 .tool-result-body {
     background: $surface;
     color: $text-muted;

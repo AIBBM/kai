@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from pathlib import Path
 
 from core.config import USERNAME
@@ -207,6 +208,21 @@ class FileViewer(TextArea):
         self.app.call_from_thread(self.app.notify, msg, severity=sev, timeout=1.5)
 
 
+class MermaidButton(Static):
+    """Mermaid 圖表開啟按鈕。"""
+
+    def __init__(self, code: str) -> None:
+        super().__init__("\U0001f5fa 開啟圖表", classes="mermaid-btn")
+        self._code = code
+
+    async def on_click(self, event: events.Click) -> None:
+        event.stop()
+        from widgets.utils import _mermaid_url, _open_url
+        url = _mermaid_url(self._code)
+        await asyncio.to_thread(_open_url, url)
+        self.app.notify("已開啟 mermaid.live", timeout=2)
+
+
 class CopyButton(Static):
     """程式碼區塊右上角的複製按鈕。"""
 
@@ -281,12 +297,30 @@ class AIMessage(Widget):
 
     async def _add_copy_buttons(self) -> None:
         from textual.widgets._markdown import MarkdownFence
+        from textual.containers import Horizontal
 
+        _MERMAID_RE = re.compile(
+            r"^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram"
+            r"|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline)\b",
+            re.IGNORECASE,
+        )
         md = self.query_one(".md-view", Markdown)
         for fence in md.query(MarkdownFence):
             if fence.query(CopyButton):
                 continue
-            if fence.code:
+            if not fence.code:
+                continue
+            lexer = (getattr(fence, "_lexer", "") or getattr(fence, "language", "")).lower()
+            is_mermaid = lexer == "mermaid" or bool(_MERMAID_RE.match(fence.code.strip()))
+            if is_mermaid:
+                await fence.mount(
+                    Horizontal(
+                        MermaidButton(fence.code),
+                        CopyButton(fence.code),
+                        classes="fence-btns",
+                    )
+                )
+            else:
                 await fence.mount(CopyButton(fence.code))
 
     def on_click(self, event: Click) -> None:

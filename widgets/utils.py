@@ -255,6 +255,29 @@ def _line_height(text: str, cols: int = 100) -> int:
     return total
 
 
+def _open_url(url: str) -> None:
+    """在瀏覽器開啟 URL（WSL → cmd.exe start，Linux → xdg-open，macOS → open）。"""
+    import shutil
+    try:
+        if shutil.which("wslpath"):
+            subprocess.run(["cmd.exe", "/c", "start", "", url], check=False, capture_output=True)
+        elif shutil.which("xdg-open"):
+            subprocess.run(["xdg-open", url], check=False, capture_output=True)
+        elif shutil.which("open"):
+            subprocess.run(["open", url], check=False, capture_output=True)
+    except Exception as e:
+        logger.warning(f"開啟 URL 失敗：{e}")
+
+
+def _mermaid_url(code: str) -> str:
+    """Mermaid 原始碼 → mermaid.live 編輯器 URL。"""
+    import base64
+    import json
+    state = json.dumps({"code": code, "mermaid": '{"theme":"default"}'}, ensure_ascii=False)
+    encoded = base64.b64encode(state.encode()).decode()
+    return f"https://mermaid.live/edit#base64:{encoded}"
+
+
 def _open_image(path: str) -> None:
     """用系統預覽器開啟圖片（WSL → cmd.exe start，Linux → xdg-open，macOS → open）。"""
     import shutil
