@@ -138,7 +138,6 @@ class StreamingMixin(_MixinBase):
                 stats = " · ".join(parts)
                 at_bot = _at_bottom()
                 await msgs.mount(Static(stats, classes="stats", markup=False))
-                self.sub_title = f"{agent.display_name} · {stats}"
                 self.query_one("#sidebar", Sidebar).refresh_git()
                 self.query_one("#file-tree", FileTree).refresh_tree()
                 if at_bot:

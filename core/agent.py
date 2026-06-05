@@ -125,7 +125,9 @@ class Agent:
             notes_root = self._agent_dir if self._agent_dir else Path(os.getcwd()) / ".kai"
             notes_path = notes_root / "notes.md"
             notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.exists() else ""
-            content = self._resolve_prompt(self._custom_system_prompt, notes_root)
+            now = datetime.now().strftime("%Y-%m-%d")
+            date_line = f"目前時間是 {now}（台灣時區 UTC+8）。使用者的名字是 {_cfg.USERNAME}。\n\n"
+            content = date_line + self._resolve_prompt(self._custom_system_prompt, notes_root)
             if notes:
                 content += f"\n\n## 📝 專案記憶\n{notes}\n\n以上規則必須嚴格遵守。"
             if self.extra_tools_note:
