@@ -207,10 +207,14 @@ class StreamingMixin(_MixinBase):
                 args_str = json.dumps(args, ensure_ascii=False, indent=2)
                 cap = 1000
                 result_preview = result[:cap] + (f"\n…（共 {len(result)} 字元）" if len(result) > cap else "")
-                body = f"**參數**\n```json\n{args_str}\n```\n\n**回應**\n```\n{result_preview}\n```"
                 at_bot = _at_bottom()
+                from textual.widgets import Label
+                from textual.containers import Vertical
                 await msgs.mount(Collapsible(
-                    Markdown(body),
+                    Vertical(
+                        Markdown(f"**參數**\n```json\n{args_str}\n```"),
+                        Static(result_preview, markup=False, classes="tool-result-body"),
+                    ),
                     title=f"{icon} {name}",
                     collapsed=not is_err,
                     classes=card_class,

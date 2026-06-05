@@ -52,10 +52,10 @@ class AppToolsMixin(_MixinBase):
                         "name":          {"type": "string", "description": "agent 顯示名稱（中文可以）"},
                         "nickname":      {"type": "string", "description": "簡短暱稱 2-4 字，省略則同 name"},
                         "model":         {"type": "string", "description": f"模型名稱，可用：{models_str}"},
-                        "system_prompt": {"type": "string", "description": "完整 system prompt；請先呼叫 design_system_prompt 取得"},
+                        "system_prompt": {"type": "string", "description": "完整 system prompt；請先呼叫 design_system_prompt 取得，**必須原封不動傳入，包含 {DIFY_DATASETS} 等佔位符，不得刪減任何段落**"},
                         "description":   {"type": "string", "description": "一行說明這個 agent 的用途"},
                         "greeting":      {"type": "string", "description": "首次對話時 AI 主動開場的 prompt，可省略"},
-                        "global_scope":  {"type": "boolean", "description": "true = 存到 ~/.kai/agents/（跨專案）；false = 存到 cwd/agents/（預設）"},
+                        "global_scope":  {"type": "boolean", "description": "**預設必須用 false**，只有用戶明確說「跨專案」或「全域」時才用 true。true = 存到 ~/.kai/agents/（跨專案）；false = 存到 cwd/agents/"},
                         "datasets": {
                             "type": "array",
                             "items": {"type": "string"},

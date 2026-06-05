@@ -83,10 +83,6 @@ class AgentsMixin(_MixinBase):
         except FileNotFoundError as e:
             self.notify(str(e), severity="error")
             return
-        if data.get("datasets") and "{DIFY_DATASETS}" in data.get("system_prompt", ""):
-            from core.tools import fetch_dify_datasets
-            kb_table = await fetch_dify_datasets(data["datasets"])
-            data["system_prompt"] = data["system_prompt"].replace("{DIFY_DATASETS}", kb_table)
         # 已開啟同一個 agent dir → 切換過去，不重複建 tab
         for tab_id, existing in list(self.tab_state.agent_tabs.items()):
             if getattr(existing, "_agent_dir", None) == adir:
@@ -223,10 +219,6 @@ class AgentsMixin(_MixinBase):
 
         name = data.get("nickname") or data.get("name", adir.name)
         new_prompt = data.get("system_prompt", "")
-        if data.get("datasets") and "{DIFY_DATASETS}" in new_prompt:
-            from core.tools import fetch_dify_datasets
-            kb_table = await fetch_dify_datasets(data["datasets"])
-            new_prompt = new_prompt.replace("{DIFY_DATASETS}", kb_table)
         new_model = data.get("model", self.agent.profile.name)
         changes: list[str] = []
 

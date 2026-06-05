@@ -218,7 +218,11 @@ def load_agent(name: str) -> tuple[dict[str, Any], Path]:
         for candidate in (name, _slugify(name), name.lower().replace(" ", "-")):
             p = base / candidate / "config.json"
             if p.exists():
-                return json.loads(p.read_text(encoding="utf-8")), p.parent
+                text = p.read_text(encoding="utf-8")
+                try:
+                    return json.loads(text), p.parent
+                except json.JSONDecodeError:
+                    return json.loads(_escape_json_strings(text)), p.parent
 
     raise FileNotFoundError(
         f"找不到 agent：{name}（搜尋：{[str(b) for b in bases]}）"
@@ -228,6 +232,10 @@ def load_agent(name: str) -> tuple[dict[str, Any], Path]:
 def save_agent(data: dict[str, Any], global_scope: bool = False) -> Path:
     """儲存 agent config；首次建立時同步寫入初始 history.json。"""
     d = agent_dir(data["name"], global_scope=global_scope)
+    system_prompt_content = data["system_prompt"]
+    if system_prompt_content != "{{include:system_prompt.md}}":
+        (d / "system_prompt.md").write_text(system_prompt_content, encoding="utf-8")
+        data = {**data, "system_prompt": "{{include:system_prompt.md}}"}
     (d / "config.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -235,7 +243,7 @@ def save_agent(data: dict[str, Any], global_scope: bool = False) -> Path:
     if not history_file.exists():
         history_file.write_text(
             json.dumps(
-                [{"role": "system", "content": data["system_prompt"]}],
+                [{"role": "system", "content": system_prompt_content}],
                 ensure_ascii=False, indent=2,
             ),
             encoding="utf-8",

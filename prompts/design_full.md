@@ -11,7 +11,7 @@
   "nickname": "簡短暱稱（2-4字，用於 UI 顯示）",
   "model": "選擇最適合的模型名稱",
   "system_prompt": "完整的 system prompt，包含角色定義、專業知識、行為規範、回覆風格",
-  "greeting": "開場白觸發 prompt",
+  "greeting": "觸發 AI 主動開場的指令，例如：請以你的角色主動打招呼，介紹你自己是 XXX，說明你能做什麼，並引導用戶說出需求。【注意：這是送給 AI 的指令，不是開場白本身的文字】",
   "description": "一句話說明這個 agent 的用途",
   "mcp_servers": {},
   "history_keep": 15

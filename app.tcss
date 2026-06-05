@@ -220,6 +220,13 @@ AIMessage.select-mode .ta-view {
     color: $error;
 }
 
+.tool-result-body {
+    background: $surface;
+    color: $text-muted;
+    padding: 0 1;
+    margin-top: 1;
+}
+
 /* ─── 補全下拉 ─── */
 AutoComplete {
     max-height: 12;

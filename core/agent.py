@@ -52,6 +52,7 @@ class Agent:
             "dify_retrieve": dify_retrieve,
         }
         self.datasets: list[str] = []  # 此 agent 可查的 Dify KB ID 清單（空 = 不啟用 RAG）
+        self._dify_table: str = ""  # fetch_dify_datasets 的快取，chat() 每輪更新
         # app-level tools（由 ChatApp._inject_app_tools 注入，只有 main agent 有）
         self.extra_tools: list[dict] = []
         self.extra_tools_map: dict = {}
@@ -113,6 +114,7 @@ class Agent:
                 return f"[include not found: {fname}]"
 
         result = re.sub(r"\{\{include:([^}]+)\}\}", _do_include, result)
+        result = result.replace("{DIFY_DATASETS}", self._dify_table)
         return result
 
     def _rebuild_system_prompt(self):
@@ -380,6 +382,9 @@ class Agent:
         if "images" in user_msg and not self.profile.supports_vision:
             raise ValueError(f"{self.profile.name} 不支援圖片輸入")
 
+        if self.datasets:
+            from core.tools.dify import fetch_dify_datasets
+            self._dify_table = await fetch_dify_datasets(self.datasets)
         self._rebuild_system_prompt()
         self.history.append(user_msg)
         messages = self._trim_history()
