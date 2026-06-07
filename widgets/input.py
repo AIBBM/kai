@@ -1,6 +1,7 @@
 """Input widgets: HistoryInput and ChatAutoComplete."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from textual import events
@@ -53,7 +54,9 @@ class HistoryInput(Input):
         if self._multiline_marker and self._multiline_paste and self._multiline_marker in text:
             text = text.replace(self._multiline_marker, self._multiline_paste, 1)
         self._multiline_paste = text
-        preview = text[:40] + ("…" if len(text) > 40 else "")
+        # preview 取第一行避免 \n 混入 marker，否則 self.value 會是多行字串
+        first_line = text.split("\n", 1)[0]
+        preview = first_line[:40] + ("…" if len(first_line) > 40 or "\n" in text else "")
         marker = f"[{len(text)} 字元] {preview}"
         self._multiline_marker = marker
         self.value = marker
@@ -119,8 +122,11 @@ class HistoryInput(Input):
                 self._real_placeholder = self.placeholder
             self.placeholder = text
 
+    # marker 格式：[<數字> 字元] 或 [<數字> 行]，開頭必須是數字以避免誤判一般文字
+    _MARKER_RE = re.compile(r"^\[\d+ (?:字元|行)\]")
+
     def _is_marker(self, value: str) -> bool:
-        return value.startswith("[") and ("字元]" in value or "行]" in value)
+        return bool(self._MARKER_RE.match(value))
 
     def _watch_selection(self, selection: object) -> None:
         """修正 Textual bug：_watch_selection 在 scroll_to_region 前設 cursor_position，
