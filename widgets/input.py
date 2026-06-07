@@ -130,15 +130,22 @@ class HistoryInput(Input):
             self.app.cursor_position = self.cursor_screen_offset
 
     def _watch_value(self, value: str) -> None:
+        # 長文字先壓縮：確保 super()._watch_value 永遠只看到短值。
+        # 若先呼叫 super() 再壓縮，Textual 會以 virtual_size=Size(N,1) 執行
+        # scroll_to_region，可能在 terminal 留下超出 TUI canvas 的殘影。
+        if len(value) > self._COMPRESS_THRESHOLD and not self._is_marker(value):
+            self._compress(value)
+            return  # _compress → self.value=marker → 重新進入此函式
+        # marker 已不在 value（例如 Ctrl+U 清空後另輸文字），清除壓縮狀態避免舊內容被送出
+        if self._multiline_marker and self._multiline_marker not in value:
+            self._multiline_paste = None
+            self._multiline_marker = None
         super()._watch_value(value)  # 父類會清掉 _suggestion
         if value and self._real_placeholder:
             self.placeholder = self._real_placeholder
             self._real_placeholder = ""
         elif not value and not self._real_placeholder and self._pending_prediction:
             self.show_prediction(self._pending_prediction)
-        # 同步壓縮：marker 固定 < 200 字元，不會觸發此條件，無無限迴圈問題
-        if len(value) > self._COMPRESS_THRESHOLD and not self._is_marker(value):
-            self._compress(value)
 
     def _on_key(self, event: events.Key) -> None:
         if event.key == "right" and self._real_placeholder and not self.value:
