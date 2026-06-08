@@ -139,7 +139,7 @@ class HistoryInput(Input):
         # 長文字先壓縮：確保 super()._watch_value 永遠只看到短值。
         # 若先呼叫 super() 再壓縮，Textual 會以 virtual_size=Size(N,1) 執行
         # scroll_to_region，可能在 terminal 留下超出 TUI canvas 的殘影。
-        if len(value) > self._COMPRESS_THRESHOLD and not self._is_marker(value):
+        if (len(value) > self._COMPRESS_THRESHOLD or "\n" in value) and not self._is_marker(value):
             self._compress(value)
             return  # _compress → self.value=marker → 重新進入此函式
         # marker 已不在 value（例如 Ctrl+U 清空後另輸文字），清除壓縮狀態避免舊內容被送出
