@@ -47,6 +47,7 @@ class UIState:
     """UI 控制旗標與 spinner 狀態。"""
 
     debug_tools: bool = False
+    greeting_enabled: bool = True
     think_override: bool | None = None
     spin_idx: int = 0
     spin_label: str = "生成中"

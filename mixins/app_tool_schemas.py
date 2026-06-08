@@ -197,6 +197,25 @@ RELOAD_MCP_TOOL = {
     },
 }
 
+TOGGLE_GREETING_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "toggle_greeting",
+        "description": (
+            "開關 agent 開場白（greeting）功能。"
+            "當用戶說「不要 greeting」、「關閉開場白」、「開啟 greeting」時使用。"
+            "這層控制所有 agent 載入時是否自動觸發開場白。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean", "description": "true = 開啟 greeting，false = 關閉 greeting"},
+            },
+            "required": ["enabled"],
+        },
+    },
+}
+
 SET_TTS_TOOL = {
     "type": "function",
     "function": {
@@ -254,6 +273,27 @@ CLOSE_AGENT_TOOL = {
                 "name": {"type": "string", "description": "agent 名稱或暱稱，省略則關閉目前 agent tab"},
             },
             "required": [],
+        },
+    },
+}
+
+SEND_TO_AGENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "send_to_agent",
+        "description": (
+            "傳送訊息給已開啟的 agent（非阻塞，立即返回）。"
+            "對方會在自己的 tab 中自動處理。"
+            "如需對方回報結果，在訊息中告知對方完成後用 send_to_agent 回傳。"
+            "對方必須已用 load_agent 開啟。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "目標 agent 的名稱或昵稱"},
+                "message": {"type": "string", "description": "訊息內容"},
+            },
+            "required": ["name", "message"],
         },
     },
 }

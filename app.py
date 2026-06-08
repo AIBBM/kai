@@ -269,6 +269,8 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             ("/tts kokoro-api", "切換 TTS 為 kokoro-api（Docker 8885）"),
             ("/tts kokoro", "切換 TTS 為 kokoro（本地 ONNX）"),
             ("/tts off", "關閉 TTS 語音"),
+            ("/greeting on", "開啟 agent 開場白"),
+            ("/greeting off", "關閉 agent 開場白"),
         ] + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
         self._sync_cap_bar()
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
@@ -651,6 +653,15 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
                         self._send(question, images=[str(p)])
             elif cmd == "/tts":
                 self._do_tts_switch(arg)
+            elif cmd == "/greeting":
+                val = arg.strip().lower()
+                if val in ("on", "off"):
+                    self.ui_state.greeting_enabled = (val == "on")
+                    label = "開啟" if self.ui_state.greeting_enabled else "關閉"
+                    self.notify(f"Greeting：{label}", severity="information", timeout=3)
+                else:
+                    state = "開啟" if self.ui_state.greeting_enabled else "關閉"
+                    self.notify(f"用法：/greeting on|off（目前：{state}）", severity="warning")
             else:
                 self.notify(f"未知指令：{cmd}", severity="warning")
             return
