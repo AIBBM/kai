@@ -33,3 +33,5 @@ images/
 *.jpeg
 .playwright-mcp/
 notebooks/
+agent-talk/
+.kai/opensource-tasks.md
