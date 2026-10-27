@@ -24,7 +24,7 @@
 /create-agent 台股技術分析師，擅長 K 線、均線、籌碼分析
 ```
 
-由 LLM 設計整份 agent 設定（system prompt、模型、暱稱、語音），存成 `agents/<name>/config.json`。每個分身開在自己的 tab，有獨立的對話歷史與記憶，可共用主 agent 的 MCP 工具，分身之間還能互相傳訊息分工。
+由 LLM 設計整份 agent 設定（system prompt、模型、暱稱、開場白；用途涉及朗讀時也會配好語音），存成 `agents/<name>/config.json`。每個分身開在自己的 tab，有獨立的對話歷史與記憶，可共用主 agent 的 MCP 工具，分身之間還能互相傳訊息分工。
 
 ### 🗣️ 用說的就能操作 Kai 本身
 
