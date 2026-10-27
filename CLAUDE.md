@@ -5,14 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Run the Textual TUI (main entry point)
+# Install (all extras = local TTS engines kokoro / melotts)
+uv sync --all-extras
+
+# Run the Textual TUI
 uv run python app.py
-
-# Run the legacy CLI agent
-uv run python main.py
-
-# Test web search directly
-uv run python core/tools.py "搜尋關鍵字" 3
 
 # Lint
 uv run ruff check .
@@ -30,25 +27,25 @@ docker compose --profile tts --profile db up -d
 
 ## Architecture
 
-Two entry points sharing the same core:
+Single entry point (`app.py`) on top of a UI-independent core:
 
 ```
-app.py              → Textual TUI (primary); ChatApp composes all mixins
-main.py             → legacy Rich/prompt_toolkit CLI (still functional)
+app.py              → Textual TUI; ChatApp composes all mixins
 core/
   agent.py          → Agent class: history, streaming, tool-call loop
   agent_factory.py  → /create-agent, /load-agent, /list-agents logic (AI-based agent design)
   backends.py       → stream_ollama / stream_openai_compat (backend-specific streaming)
-  tools.py          → web_search (SearXNG), bash_exec, run_tool dispatcher
+  app_state.py      → ChatApp state dataclasses (InputState, SessionState, UIState, TabState)
+  tools/            → built-in tools: web.py (web_search / fetch_urls), bash.py (bash_exec), dify.py (RAG), dispatch.py (run_tool)
   models.py         → ModelProfile dataclass + REGISTRY
   config.py         → all env-var constants (loaded once at import)
+  config_registry.py → single source of truth for every configurable key
   mcp_client.py     → MCP server lifecycle + tool dispatch
   tts.py            → TTS engine abstraction (edge-tts, melotts, kokoro-api, kokoro-onnx)
-  file_picker.py    → prompt_toolkit file browser (used by main.py /image)
   tool_log.py       → tool call debug log (append to .kai/tool_calls.log, only when DEBUG_TOOLS=1)
 mixins/             → ChatApp behaviour split into focused mixins (all inherit _MixinBase = ChatApp)
   agents.py         → AgentsMixin: /create-agent, /load-agent, /list-agents, /reload-agent, /delete-agent
-  app_tools.py      → AppToolsMixin: 17 AI-callable app tools (load/create/delete agent, model switch, TTS, MCP…)
+  app_tools.py      → AppToolsMixin: 19 AI-callable app tools (load/create/delete agent, model switch, TTS, MCP…)
   bash.py           → BashMixin: ! command execution
   mcp.py            → MCPMixin: /mcp-list, /mcp-reload, /mcp-add, /mcp-del
   session.py        → SessionMixin: /cd, /compact, /cls, /resume, /model, /rename, /nickname, /reload-config, /init-config
@@ -107,7 +104,8 @@ widgets/
 
 | Command | Action |
 |---------|--------|
-| `/clear` | Archive history to `.history/`, clear UI (guard: skips if only system msg) |
+| `/clear` | Clear the chat screen only (history kept) |
+| `/cls` | Archive history to `.history/`, then clear memory and UI (guard: skips if only system msg) |
 | `/resume [N]` | List or restore archived sessions (ResumeScreen picker) |
 | `/rename <name>` | Name current session (shown in ResumeScreen) |
 | `/compact` | Compress history with Gemini to free context window |
@@ -128,6 +126,8 @@ widgets/
 | `/load-agent <name>` | Load an agent config and spawn a new tab (dedup: switches to existing tab if already open) |
 | `/list-agents` | Show all agents in `agents/` (AgentsScreen picker) |
 | `/delete-agent [name]` | Delete agent(s); omit name to open multi-select panel |
+| `/close-agent [name]` | Close an agent tab; omit name to close the current tab |
+| `/greeting on\|off` | Toggle subagent opening greeting |
 | `/reload-agent` | Re-read `config.json` and hot-swap system prompt, model, nickname, tts in running agent |
 | `/reload-config` | Re-read `.kai/config.json` and apply all settings to the running process |
 | `/init-config` | Open interactive ConfigScreen: select keys, L→`cwd/.kai/config.json`, G→`~/.kai/config.json` |
@@ -188,9 +188,9 @@ When changing directory (via `/cd` or `!cd`):
 4. Clears chat UI
 5. Refreshes file tree and sidebar
 
-### Session history (`/clear` and `/resume`)
+### Session history (`/cls` and `/resume`)
 
-`/clear` archives `history.json` to `.history/YYYYMMDD_HHMMSS[_N].json` before clearing (guard: skips if history has only system message, or if just resumed with no new messages via `_resumed_from` flag).
+`/cls` archives `history.json` to `.history/YYYYMMDD_HHMMSS[_N].json` before clearing (guard: skips if history has only system message, or if just resumed with no new messages via `_resumed_from` flag).
 
 `/resume` opens `ResumeScreen` listing archives with timestamp, name, and first user message. Selecting an entry restores the session. Inline rename is supported from within the screen.
 
@@ -269,7 +269,7 @@ Add one entry to `REGISTRY` in `core/models.py`:
 
 ### Adding a new tool
 
-1. Define the Ollama tool schema (like `SEARCH_TOOL` in `core/tools.py`)
+1. Define the Ollama tool schema (like `SEARCH_TOOL` in `core/tools/web.py`)
 2. Implement `async def my_tool(...) -> str`
 3. Register in `Agent.tools_map` in `core/agent.py`
 4. Pass the schema in `active_tools` list inside `chat()`
@@ -427,7 +427,7 @@ See `CONVENTIONS.md` for the full style guide. Key points:
 - `textual-autocomplete` — slash command / path autocomplete in prompt
 - `ollama` — native Python client; used directly to access `msg.thinking` and `tool_calls`
 - `openai` — used by `stream_openai_compat` in `core/backends.py` for Gemini / compatible endpoints
-- `rich` — rendering in legacy CLI and agent internals
-- `prompt_toolkit` — legacy CLI prompt + file picker
+- `rich` — text rendering in agent internals and widgets
+- `prompt_toolkit` — input history file format (FileHistory)
 - `tenacity` — retry logic in `web_search`
-- `loguru` — structured logging to `agent_tui.log` (stderr in legacy CLI)
+- `loguru` — structured logging to `agent_tui.log`

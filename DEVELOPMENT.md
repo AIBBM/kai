@@ -213,17 +213,17 @@ msg.tool_calls = [
 
 ## TUI 架構（`app.py` + `mixins/` + `widgets/`）
 
-CLI 版（`main.py`）之外，`app.py` 是 Textual TUI 的入口點。ChatApp 的行為透過 mixin 拆分：
+`app.py` 是 Textual TUI 的入口點。ChatApp 的行為透過 mixin 拆分：
 
 ```
 app.py          ChatApp（組合所有 mixin；事件處理、tab 管理、layout）
 mixins/
   streaming.py  _send worker（@work exclusive）、串流回呼、TTS 播放
   agents.py     /create-agent, /load-agent, /list-agents, /reload-agent, /delete-agent
-  app_tools.py  17 個 AI 可呼叫的 app tools（切換模型、TTS、MCP…）
+  app_tools.py  19 個 AI 可呼叫的 app tools（切換模型、TTS、MCP…）
   bash.py       ! 指令執行、!cd 攔截
   mcp.py        /mcp-list, /mcp-add, /mcp-del, /mcp-reload
-  session.py    /cd, /compact, /clear, /resume, /model, /nickname, /reload-config…
+  session.py    /cd, /compact, /cls, /resume, /model, /nickname, /reload-config…
 widgets/
   input.py      HistoryInput（Up/Down 歷史、Ctrl+Z undo、多行貼上）
                 ChatAutoComplete（斜線指令、路徑補全）

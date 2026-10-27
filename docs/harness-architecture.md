@@ -52,7 +52,7 @@ Martin Fowler 進一步把 Harness 分成兩層：
 │  kai：Builder Harness                                         │
 │                                                               │
 │  ┌──────────┐   ┌──────────────┐   ┌────────────────────┐   │
-│  │ CLI/main │   │ TUI/app.py   │   │  AGENT_NOTES.md    │   │
+│  │ CLI/main │   │ TUI/app.py   │   │  notes.md    │   │
 │  │ 入口     │   │ Textual TUI  │   │ (User Harness)     │   │
 │  └────┬─────┘   └──────┬───────┘   └────────────────────┘   │
 │       │                │              │                       │
@@ -85,14 +85,14 @@ Martin Fowler 進一步把 Harness 分成兩層：
 
 ### 3.1 工具抽象層（Tool Layer）
 
-**Location**：`core/tools.py`
+**Location**：`core/tools/`
 
 kai 的工具層解決一個核心工程問題：**如何讓 LLM 產生的 JSON tool call 安全地對應到真正的系統操作**。
 
 #### 架構
 
 ```python
-# tools.py：三級分發
+# core/tools/dispatch.py：三級分發
 
 SEARCH_TOOL     # → web_search(query)      → SearXNG API
 FETCH_URLS_TOOL # → fetch_urls(urls)       → Jina Reader
@@ -119,7 +119,7 @@ results = await asyncio.gather(
 
 | 決策 | 理由 |
 |------|------|
-| 工具 schema 硬寫在 `tools.py`，不從 OpenAPI 自動產生 | 保持 schema 描述精準可控，避免模型混淆 |
+| 工具 schema 硬寫在 `tools/`，不從 OpenAPI 自動產生 | 保持 schema 描述精準可控，避免模型混淆 |
 | 用 `Pydantic BaseModel` 做入參型別檢查 | 防止模型傳入畸形參數造成 crash |
 | `tenacity` exponential backoff 搜尋重試 | 增加魯棒性，搜尋服務不穩時自動重試 |
 | 結果長度控制（`budget_results`, `_trim_tool_result`） | 避免工具結果撐爆 context window |
@@ -351,8 +351,8 @@ def _rebuild_system_prompt(self):
     cwd = os.getcwd()                            # 目錄會變
     mcp_server_desc = ...                        # MCP 連線狀態會變
 
-    # 檢查 AGENT_NOTES.md（使用者撰寫的 User Harness）
-    notes_path = Path(cwd) / "AGENT_NOTES.md"
+    # 檢查 notes.md（使用者撰寫的 User Harness）
+    notes_path = Path(cwd) / ".kai" / "notes.md"
     notes = notes_path.read_text().strip() if notes_path.exists() else ""
 
     system_msg = {
@@ -377,14 +377,14 @@ def _rebuild_system_prompt(self):
 
 - **All-or-nothing 重建**：整個 system message 每次都重新產生，不 patch
 - **狀態感知**：根據 MCP 工具組合動態調整 system prompt 內容（有 Playwright 就加 browser SOP、有 filesystem 就加檔案操作限制）
-- **User Harness 注入**：讀取 `AGENT_NOTES.md` 讓使用者能疊加自己的規則
+- **User Harness 注入**：讀取 `notes.md` 讓使用者能疊加自己的規則
 - **時間資訊**：防止模型用舊的訓練資料回答時間敏感問題
 
 ---
 
 ### 3.7 Sandbox（執行環境）
 
-**Location**：`core/tools.py` — `bash_exec()`
+**Location**：`core/tools/` — `bash_exec()`
 
 bash 執行是 harness 風險最高的部分——它讓模型能執行任意 shell 指令。
 
@@ -421,12 +421,12 @@ async def bash_exec(command: str, timeout: int = 0) -> str:
 
 kai 提供兩個使用者可介入的 harness 層：
 
-### AGENT_NOTES.md
+### .kai/notes.md
 
 放在專案根目錄的 Markdown 檔案，kai 啟動時自動讀取並注入 system prompt：
 
 ```markdown
-# AGENT_NOTES.md
+# .kai/notes.md
 - 這個專案使用 uv 管理 Python 套件，不要用 pip install
 - API endpoint 在 config/api.toml，不要寫死在程式碼
 - 前端使用 React + Tailwind，icon 用 lucide-react
@@ -491,7 +491,7 @@ MCP server 有多層資源需要管理（stdio process、ClientSession、httpx c
 | **Context Mgmt**        | trim + rotate + compact      | 黑箱                 | 黑箱                  |
 | **Sandbox**             | subprocess shell             | Docker container     | 受限 sandbox          |
 | **System Prompt Factory** | 公開原始碼                 | 不可見               | 不可見                |
-| **User Harness**        | AGENT_NOTES.md               | CLAUDE.md / rules    | Custom instructions   |
+| **User Harness**        | notes.md               | CLAUDE.md / rules    | Custom instructions   |
 | **TUI**                 | Textual                      | terminal-only        | web UI                |
 
 kai 的獨特定位在於：

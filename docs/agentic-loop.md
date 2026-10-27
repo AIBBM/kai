@@ -34,7 +34,7 @@ while True:
     # 5. 繼續下一輪
 ```
 
-### 2. 工具分發：`tools.py: run_tool()`
+### 2. 工具分發：`core/tools/dispatch.py: run_tool()`
 
 優先序：MCP tools → 本地 tools_map
 

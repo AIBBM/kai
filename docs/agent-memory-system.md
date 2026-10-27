@@ -6,7 +6,7 @@
 chat() 呼叫時：
 
 1. _rebuild_system_prompt()
-   → 重讀 AGENT_NOTES.md
+   → 重讀 notes.md
    → 覆寫記憶體的 history[0]（system message）
 
 2. history.append(user_msg)
@@ -28,12 +28,12 @@ chat() 呼叫時：
 
 tool 的中間步驟（呼叫、回傳）只存在當輪 `messages`，結束後丟棄。下一輪 AI 只看到最終的 assistant 文字。
 
-## AGENT_NOTES.md 與 `/remember`
+## notes.md 與 `/remember`
 
-`/remember <內容>` 寫入 `AGENT_NOTES.md`，立即呼叫 `_rebuild_system_prompt()`，下一輪對話生效。
+`/remember <內容>` 寫入 `notes.md`，立即呼叫 `_rebuild_system_prompt()`，下一輪對話生效。
 
-- 主 agent：寫到 `<cwd>/AGENT_NOTES.md`
-- subagent：寫到 `agents/<name>/AGENT_NOTES.md`
+- 主 agent：寫到 `<cwd>/.kai/notes.md`
+- subagent：寫到 `agents/<name>/notes.md`
 
 注入位置在 system message 尾端：
 
@@ -44,7 +44,7 @@ tool 的中間步驟（呼叫、回傳）只存在當輪 `messages`，結束後�
 以上規則必須嚴格遵守。
 ```
 
-刪掉 `AGENT_NOTES.md` 的內容後，**送出下一條訊息**時 `_rebuild_system_prompt()` 重讀檔案，notes 就從 system message 消失。
+刪掉 `notes.md` 的內容後，**送出下一條訊息**時 `_rebuild_system_prompt()` 重讀檔案，notes 就從 system message 消失。
 
 ## System Prompt 模板變數
 
@@ -86,4 +86,4 @@ tool 的中間步驟（呼叫、回傳）只存在當輪 `messages`，結束後�
 
 ## system message 的版本問題
 
-`history.json` 裡存的 system message 是**上次 rebuild 時的快照**，不一定是最新的（例如你改了 `AGENT_NOTES.md` 但還沒送訊息）。實際送給 AI 的 system message 永遠是 `chat()` 開頭 `_rebuild_system_prompt()` 當下重建的，不是從 `history.json` 讀的舊版本。
+`history.json` 裡存的 system message 是**上次 rebuild 時的快照**，不一定是最新的（例如你改了 `notes.md` 但還沒送訊息）。實際送給 AI 的 system message 永遠是 `chat()` 開頭 `_rebuild_system_prompt()` 當下重建的，不是從 `history.json` 讀的舊版本。

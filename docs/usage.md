@@ -8,10 +8,20 @@
 
 在提示列輸入 `/` 開頭的指令可執行特殊動作。
 
-### `/clear` — 清除對話
+### `/clear` — 清除畫面
 
 ```
 /clear
+```
+
+只清除聊天畫面，對話記憶保留。
+
+---
+
+### `/cls` — 歸檔並清除對話
+
+```
+/cls
 ```
 
 將目前對話歸檔至 `.history/YYYYMMDD_HHMMSS_N-turns.json`，然後清空聊天畫面並重置歷史。若目前對話只有系統訊息（尚未進行任何對話），或剛透過 `/resume` 還原且未產生新訊息，則會跳過歸檔。
@@ -174,9 +184,9 @@ FileViewer 中選取文字後按 `Ctrl+C`，會透過以下流程複製：
 
 ## Session 管理
 
-### 歸檔（`/clear`）
+### 歸檔（`/cls`）
 
-執行 `/clear` 時，目前的 `.kai/history.json` 會被複製到 `.kai/.history/` 目錄，檔名格式為 `YYYYMMDD_HHMMSS_N-turns.json`。之後清空聊天並重置歷史。
+執行 `/cls` 時，目前的 `.kai/history.json` 會被複製到 `.kai/.history/` 目錄，檔名格式為 `YYYYMMDD_HHMMSS_N-turns.json`。之後清空聊天並重置歷史。
 
 以下情況會跳過歸檔：
 - 歷史中只有系統提示訊息（尚未進行實際對話）
@@ -272,7 +282,7 @@ MCP（Model Context Protocol）工具透過 `mcp_servers.json` 設定。模型�
 
 ### 新增工具
 
-1. 在 `core/tools.py` 定義 Ollama 工具 schema（仿照 `SEARCH_TOOL`）。
+1. 在 `core/tools/` 下定義 Ollama 工具 schema（仿照 `SEARCH_TOOL`）。
 2. 實作 `async def my_tool(...) -> str` 函式。
 3. 在 `core/agent.py` 的 `Agent.tools_map` 中登記對應關係。
 4. 將 schema 加入 `chat()` 內的 `active_tools` 清單。

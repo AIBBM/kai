@@ -15,8 +15,9 @@
 ## 快速開始
 
 ```bash
-uv sync
-cp .env.example .env        # 填入 API keys
+uv sync                     # 需要 kokoro / melotts TTS 時：uv sync --extra tts
+cp .env.example .env        # 填入 API keys 與 SEARXNG_SECRET
+docker compose up -d        # 啟動 SearXNG（web_search 用）
 uv run python app.py
 uv run python app.py ~/my-project   # 指定工作目錄
 ```
@@ -54,11 +55,13 @@ BASH_TIMEOUT=30             # bash 指令逾時秒數
 | `/model <name>` | 切換模型 |
 | `/nickname [名字]` | 查詢或設定目前模型暱稱 |
 | `/think` | 切換 Thinking 模式 |
-| `/clear` | 歸檔並清除對話（可 `/resume` 恢復） |
+| `/clear` | 清除畫面（保留對話記憶） |
+| `/cls` | 歸檔並清除對話記憶（可 `/resume` 恢復） |
 | `/resume [N]` | 列出或載入歸檔 session |
+| `/rename <名稱>` | 命名目前 session |
 | `/ask <問題>` | 臨時提問，不污染對話歷史 |
 | `/save` | 將上一次 `/ask` 存入歷史 |
-| `/remember <內容>` | 寫入 `AGENT_NOTES.md` 永久記憶 |
+| `/remember <內容>` | 寫入 `.kai/notes.md` 永久記憶 |
 | `/compact` | 用 Gemini 壓縮對話歷史（釋放 context） |
 | `/image <路徑> [問題]` | 傳圖片給 vision 模型 |
 | `/cd <路徑>` | 切換工作目錄（各目錄有獨立歷史） |
@@ -72,6 +75,8 @@ BASH_TIMEOUT=30             # bash 指令逾時秒數
 | `/load-agent <name>` | 在新 tab 載入 Agent |
 | `/list-agents` | 列出所有已建立的 Agents |
 | `/delete-agent [name]` | 刪除 Agent（省略開多選面板） |
+| `/close-agent [name]` | 關閉 Agent tab（省略關目前 tab） |
+| `/greeting on\|off` | 開關 subagent 開場白 |
 | `/reload-agent` | 熱重載當前 Agent config（保留對話歷史） |
 | `/reload-config` | 熱重載 `.kai/config.json` 設定 |
 | `/init-config` | 互動式 ConfigScreen 匯出設定 |
@@ -137,7 +142,7 @@ core/
   agent.py          → Agent 類別：串流、工具呼叫迴圈、歷史管理
   agent_factory.py  → /create-agent 邏輯，agents/ 目錄管理
   backends.py       → stream_ollama / stream_openai_compat
-  tools.py          → web_search, fetch_urls, bash_exec
+  tools/            → web_search, fetch_urls, bash_exec, dify_retrieve, run_tool
   models.py         → ModelProfile + REGISTRY
   config.py         → 環境變數常數
   mcp_client.py     → MCP server 生命週期 + 工具 dispatch

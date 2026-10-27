@@ -57,17 +57,17 @@ python3 /path/to/tool.py create_draft --title "標題" --slug "slug" --tags "tec
 
 ## 模式二：專用 tool（寫進 kai core）
 
-在 `core/tools.py` 定義工具 schema 與實作，在 `core/agent.py` 登記，讓所有 agent 都能以結構化方式呼叫。
+在 `core/tools/` 定義工具 schema 與實作，在 `core/agent.py` 登記，讓所有 agent 都能以結構化方式呼叫。
 
 ```
 AI
 └─▶ create_ghost_draft(title=..., html=..., tags=[...])   ← 結構化 schema
-      └─▶ core/tools.py 的 async 函式直接呼叫外部 API
+      └─▶ core/tools/ 的 async 函式直接呼叫外部 API
 ```
 
 ### 實作方式
 
-1. 在 `core/tools.py` 定義 Ollama tool schema：
+1. 在 `core/tools/` 定義 Ollama tool schema：
 
 ```python
 CREATE_GHOST_DRAFT_TOOL = {
@@ -116,7 +116,7 @@ self.tools_map = {
 
 | 優點 | 缺點 |
 |------|------|
-| AI 看到結構化 schema，呼叫更精準 | 需修改 kai core（tools.py + agent.py） |
+| AI 看到結構化 schema，呼叫更精準 | 需修改 kai core（core/tools/ + agent.py） |
 | 無 shell 引號問題 | 工具與 kai 耦合，換系統要重寫 |
 | 支援 `asyncio.gather` 並行呼叫 | 所有 agent 都會看到此工具（需條件載入才能限制） |
 | tool debug 卡片顯示乾淨的 JSON args | 需維護 schema 與實作同步 |

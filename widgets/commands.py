@@ -72,7 +72,7 @@ class ChatCommands(Provider):
                 help="臨時提問，不污染對話歷史"),
             Hit(0.9, "/remember  記住規則",
                 partial(_fill_prompt, app, "/remember "),
-                help="寫入 AGENT_NOTES.md 讓 AI 永久記住"),
+                help="寫入 .kai/notes.md 讓 AI 永久記住"),
             Hit(0.9, "/image  傳送圖片",
                 partial(_fill_prompt, app, "/image "),
                 help="傳送圖片給視覺模型：/image <路徑> [問題]"),
