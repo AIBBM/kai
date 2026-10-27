@@ -202,7 +202,7 @@ async def _speak_melotts(
     try:
         import websockets
     except ImportError:
-        logger.warning("tts: websockets 未安裝：uv add websockets")
+        logger.warning("tts: websockets 未安裝：uv sync --extra tts")
         return
     import random
     import string
@@ -277,7 +277,7 @@ def _load_kokoro() -> Any:
     try:
         from kokoro_onnx import Kokoro
     except ImportError:
-        raise RuntimeError("kokoro-onnx 未安裝：uv add kokoro-onnx soundfile")
+        raise RuntimeError("kokoro-onnx 未安裝：uv sync --extra tts")
 
     model_path = _download_kokoro_file(_KOKORO_MODEL_FILE)
     voices_path = _download_kokoro_file(_KOKORO_VOICES_FILE)
@@ -297,7 +297,11 @@ async def _speak_kokoro(
     player: str = "auto",
 ) -> None:
     """kokoro-onnx 本地 TTS。模型在 thread executor 跑，不阻塞 event loop。"""
-    import soundfile as sf
+    try:
+        import soundfile as sf
+    except ImportError:
+        logger.warning("tts: soundfile 未安裝：uv sync --extra tts")
+        return
 
     if len(text) > _KOKORO_MAX_CHARS:
         logger.info(f"tts kokoro: 截斷 {len(text)} → {_KOKORO_MAX_CHARS} 字")
