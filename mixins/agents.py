@@ -283,6 +283,12 @@ class AgentsMixin(_MixinBase):
                     {"role": "user", "content": full_content, "_inbox_sender": sender},
                     on_token=on_token, on_done=on_done, on_tool_call=on_tool_call,
                 )
+        except Exception as e:
+            # @work 預設 exit_on_error：未接住的例外（API 額度用完、網路中斷）會讓整個 app 關閉
+            logger.exception(f"[inbox] {agent.display_name} 處理失敗")
+            await scroll.mount(_Static(f"❌ 錯誤：{e}", classes="error-msg", markup=False))
+            scroll.scroll_end(animate=False)
+            self.notify(f"{agent.display_name} 處理 {sender} 的訊息失敗：{e}", severity="error")
         finally:
             timer.stop()
             self.tab_state.streaming_tabs.discard(target_tab_id)
