@@ -3,7 +3,7 @@
 # 啟動方式：
 #   docker compose up -d                          # 只啟 SearXNG（搜尋）
 #   docker compose --profile tts up -d            # + MeloTTS + kokoro-fastapi
-#   docker compose --profile db up -d             # + PostgreSQL/TimescaleDB
+#   docker compose --profile db up -d             # + PostgreSQL/TimescaleDB（帳密見 .env）
 #   docker compose --profile tts --profile db up -d  # 全部
 
 services:
@@ -23,6 +23,7 @@ services:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
       BASE_URL: http://localhost:8888/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?請在 .env 設定 SEARXNG_SECRET（openssl rand -hex 32）}
     depends_on: [valkey]
     restart: unless-stopped
 
@@ -65,9 +66,9 @@ services:
     networks: [kai-net]
     ports: ["5432:5432"]
     environment:
-      POSTGRES_DB: twstock
-      POSTGRES_USER: mcpuser
-      POSTGRES_PASSWORD: REDACTED
+      POSTGRES_DB: ${POSTGRES_DB:-kai}
+      POSTGRES_USER: ${POSTGRES_USER:-kai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kai}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     profiles: [db]
