@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 from loguru import logger
 from textual import events, on, work
 from textual.app import App, ComposeResult
+from textual.message import Message
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import (
@@ -109,6 +110,15 @@ async def _fetch_db_schema(mcp: MCPClient) -> str:
                 logger.warning(f"schema 查詢失敗（{tool_name}）：{e}")
                 break
     return ""
+
+
+class AgentMessage(Message):
+    """agent 之間透過 send_to_agent 傳遞的訊息（雙向）。"""
+    def __init__(self, sender: str, target: str, content: str) -> None:
+        super().__init__()
+        self.sender = sender
+        self.target = target   # "main" / "chat" 或 agent 暱稱
+        self.content = content
 
 
 class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, StreamingMixin, App[None]):
@@ -245,7 +255,7 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             ("/rename", "命名目前 session  /rename <名稱>"),
             ("/nickname", "查詢或設定目前模型的暱稱  /nickname [名字]"),
             ("/create-agent", "用 AI 設計新 agent  /create-agent [--global] <描述>"),
-            ("/load-agent", "載入 agent 設定  /load-agent <name>"),
+            ("/load-agent", "載入 agent 設定  /load-agent <name> [name2 ...]"),
             ("/list-agents", "列出所有已建立的 agents"),
             ("/reload-agent", "重新載入目前 agent 的 config.json（system prompt 熱更新）"),
             ("/delete-agent", "刪除 agent  /delete-agent [name]（省略 name 開面板選）"),
@@ -259,6 +269,8 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
             ("/tts kokoro-api", "切換 TTS 為 kokoro-api（Docker 8885）"),
             ("/tts kokoro", "切換 TTS 為 kokoro（本地 ONNX）"),
             ("/tts off", "關閉 TTS 語音"),
+            ("/greeting on", "開啟 agent 開場白"),
+            ("/greeting off", "關閉 agent 開場白"),
         ] + [(f"/model {m}", f"切換到 {m}") for m in REGISTRY]
         self._sync_cap_bar()
         self.set_interval(15, lambda: self.query_one("#sidebar", Sidebar).refresh_git())
@@ -290,7 +302,17 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
                     )
                 else:
                     text = content
-                if text:
+                inbox_sender = msg.get("_inbox_sender")
+                if inbox_sender and text:
+                    from textual.widgets import Collapsible
+                    preview = text[:300] + ("…" if len(text) > 300 else "")
+                    widgets.append(Collapsible(
+                        Static(preview, markup=False),
+                        title=f"📨 來自 {inbox_sender}",
+                        collapsed=True,
+                        classes="inbox-bubble",
+                    ))
+                elif text:
                     widgets.append(Static(
                         f"[bold]{USERNAME}[/bold]\n{text}",
                         markup=True,
@@ -394,8 +416,12 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         if self.input_state.history_idx == -1:
             self.input_state.history_draft = prompt.value
         self.input_state.history_idx = min(self.input_state.history_idx + 1, len(self.input_state.history) - 1)
-        prompt.value = self.input_state.history[-(self.input_state.history_idx + 1)]
-        prompt.cursor_position = len(prompt.value)
+        _hval = self.input_state.history[-(self.input_state.history_idx + 1)]
+        if (len(_hval) > prompt._COMPRESS_THRESHOLD or "\n" in _hval) and not prompt._is_marker(_hval):
+            prompt._compress(_hval)
+        else:
+            prompt.value = _hval
+            prompt.cursor_position = len(_hval)
 
     def action_history_next(self) -> None:
         prompt = self.query_one("#prompt", HistoryInput)
@@ -409,9 +435,14 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
         self.input_state.history_idx -= 1
         if self.input_state.history_idx == -1:
             prompt.value = self.input_state.history_draft
+            prompt.cursor_position = len(prompt.value)
         else:
-            prompt.value = self.input_state.history[-(self.input_state.history_idx + 1)]
-        prompt.cursor_position = len(prompt.value)
+            _hval = self.input_state.history[-(self.input_state.history_idx + 1)]
+            if (len(_hval) > prompt._COMPRESS_THRESHOLD or "\n" in _hval) and not prompt._is_marker(_hval):
+                prompt._compress(_hval)
+            else:
+                prompt.value = _hval
+                prompt.cursor_position = len(_hval)
 
     @on(events.Click, "#attach-btn")
     async def _on_attach_clicked(self, event: events.Click) -> None:
@@ -570,9 +601,10 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
                     self._do_create_agent(arg)
             elif cmd == "/load-agent":
                 if not arg:
-                    self.notify("用法：/load-agent <name>", severity="warning")
+                    self.notify("用法：/load-agent <name> [name2 ...]", severity="warning")
                 else:
-                    await self._do_load_agent(arg)
+                    for _ag_name in arg.split():
+                        await self._do_load_agent(_ag_name)
             elif cmd == "/list-agents":
                 await self._do_list_agents()
             elif cmd == "/reload-agent":
@@ -621,6 +653,15 @@ class ChatApp(MCPMixin, AgentsMixin, AppToolsMixin, SessionMixin, BashMixin, Str
                         self._send(question, images=[str(p)])
             elif cmd == "/tts":
                 self._do_tts_switch(arg)
+            elif cmd == "/greeting":
+                val = arg.strip().lower()
+                if val in ("on", "off"):
+                    self.ui_state.greeting_enabled = (val == "on")
+                    label = "開啟" if self.ui_state.greeting_enabled else "關閉"
+                    self.notify(f"Greeting：{label}", severity="information", timeout=3)
+                else:
+                    state = "開啟" if self.ui_state.greeting_enabled else "關閉"
+                    self.notify(f"用法：/greeting on|off（目前：{state}）", severity="warning")
             else:
                 self.notify(f"未知指令：{cmd}", severity="warning")
             return

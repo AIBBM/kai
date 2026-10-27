@@ -132,11 +132,171 @@ class AgentsMixin(_MixinBase):
         self.agent = agent
         await self._render_history_into(scroll, agent)
         self.notify(f"✅ 已開啟 agent：{data['name']}", timeout=3)
+        self._inject_interagent_tools(agent)
         # 若 config 有 greeting 且是全新對話，觸發 AI 主動開場
         greeting = data.get("greeting", "").strip()
         fresh = not any(m.get("role") != "system" for m in agent.history)
-        if greeting and fresh:
+        if greeting and fresh and self.ui_state.greeting_enabled:
             self._trigger_greeting(agent, scroll, greeting)
+
+    def on_agent_message(self, event: "AgentMessage") -> None:
+        """Textual event：將 AgentMessage 路由到目標 agent。"""
+        self._dispatch_to_agent(event.sender, event.target, event.content)
+
+    @work
+    async def _dispatch_to_agent(self, sender: str, target: str, content: str) -> None:
+        """找到目標 agent，顯示 inbox bubble，並執行 agent.chat()。"""
+        import json as _json
+        import re as _re
+        from widgets.chat import AIMessage
+        from widgets.input import HistoryInput
+        from textual.widgets import Static as _Static, Collapsible
+        from loguru import logger
+        from mixins.streaming import SPINNER
+
+        q = target.strip().lower()
+        main = self.tab_state.main_agent
+        agent: "Agent | None" = None
+        scroll_id: str = ""
+        target_tab_id: str = ""
+
+        if main and q in ("main", "chat", main.display_name.lower()):
+            agent = main
+            scroll_id = "#messages"
+            target_tab_id = "chat"
+        else:
+            for tab_id, ag in self.tab_state.agent_tabs.items():
+                nick = (ag._nickname or "").lower()
+                dir_name = (ag._agent_dir.name if ag._agent_dir else "").lower()
+                if q in nick or nick in q or q in dir_name or dir_name in q:
+                    agent = ag
+                    scroll_id = f"#msgs-{tab_id}"
+                    target_tab_id = tab_id
+                    break
+
+        if agent is None:
+            logger.warning(f"[inbox] dispatch: 找不到 target='{target}'，已開啟：{[a.display_name for a in self.tab_state.agent_tabs.values()]}")
+            return
+
+        try:
+            scroll = self.query_one(scroll_id, VerticalScroll)
+        except Exception:
+            logger.warning(f"[inbox] dispatch: scroll '{scroll_id}' 不存在")
+            return
+
+        # 加入 streaming_tabs，讓 tab 切換時 prompt 保持鎖定
+        self.tab_state.streaming_tabs.add(target_tab_id)
+        prompt = self.query_one("#prompt", HistoryInput)
+        try:
+            from textual.widgets import TabbedContent as _TC
+            if self.query_one("#center-tabs", _TC).active == target_tab_id:
+                prompt.disabled = True
+                prompt.add_class("streaming")
+        except Exception:
+            pass
+
+        # spinner
+        _spin_idx = 0
+        _spin_label = "等待回覆"
+
+        def _tick() -> None:
+            nonlocal _spin_idx
+            _spin_idx = (_spin_idx + 1) % len(SPINNER)
+            try:
+                from textual.widgets import TabbedContent as _TC2
+                if self.query_one("#center-tabs", _TC2).active == target_tab_id:
+                    dbg = "  [dim]🔧 debug[/dim]" if self.ui_state.debug_tools else ""
+                    prompt.border_title = f"{SPINNER[_spin_idx]} {_spin_label}{dbg}"
+            except Exception:
+                pass
+
+        timer = self.set_interval(0.08, _tick)
+
+        preview = content[:300] + ("…" if len(content) > 300 else "")
+        await scroll.mount(Collapsible(
+            _Static(preview, markup=False),
+            title=f"📨 來自 {sender}",
+            collapsed=True,
+            classes="inbox-bubble",
+        ))
+        stream_msg: "AIMessage | None" = None
+        buf: list[str] = []
+
+        async def on_token(chunk: str) -> None:
+            nonlocal _spin_label, stream_msg
+            _spin_label = "生成中"
+            buf.append(chunk)
+            if stream_msg is None:
+                await scroll.mount(_Static(f"🤖 {agent.display_name}", classes="ai-header", markup=False))
+                stream_msg = AIMessage()
+                await scroll.mount(stream_msg)
+            await stream_msg.update_content("".join(buf))
+            scroll.scroll_end(animate=False)
+
+        async def on_done(*_) -> None:
+            if stream_msg is None:
+                return
+            hist = agent.history
+            display = str(hist[-1]["content"]) if hist and hist[-1]["role"] == "assistant" else "".join(buf)
+            await stream_msg.update_content(display, final=True)
+
+        async def on_tool_call(name: str, args: dict, result: str) -> None:
+            nonlocal _spin_label, stream_msg, buf
+            _spin_label = "工具回應中"
+            if stream_msg and buf:
+                _pre = _re.sub(r"\s*<next>.*?</next>\s*$", "", "".join(buf), flags=_re.DOTALL).rstrip()
+                await stream_msg.update_content(_pre, final=True)
+                stream_msg = None
+                buf.clear()
+            _ERR = ("[MCP Error]", "[Error]", "[ValidationError]", "[stderr]", "Traceback")
+            is_err = any(kw in result for kw in _ERR)
+            icon = "❌" if is_err else "🔧"
+            card_cls = "tool-debug tool-debug-error" if is_err else "tool-debug"
+            if not self.ui_state.debug_tools:
+                if is_err:
+                    await scroll.mount(Collapsible(
+                        _Static(result[:600], markup=False),
+                        title=f"{icon} {name}  [dim]工具錯誤[/dim]",
+                        collapsed=True, classes=card_cls,
+                    ))
+                return
+            args_str = _json.dumps(args, ensure_ascii=False, indent=2)
+            body = f"ARGS:\n{args_str}\n\nRESULT:\n{result[:2000]}"
+            await scroll.mount(Collapsible(
+                _Static(body, markup=False),
+                title=f"{icon} {name}",
+                collapsed=True, classes=card_cls,
+            ))
+            scroll.scroll_end(animate=False)
+
+        is_main_target = (agent is self.tab_state.main_agent)
+        if is_main_target:
+            full_content = content
+        else:
+            main = self.tab_state.main_agent
+            reply_to = "main" if (main and sender == main.display_name) else sender
+            full_content = content + f"\n\n[系統]完成後必須呼叫 send_to_agent(\"{reply_to}\", 結果摘要) 回報。"
+
+        logger.info(f"[inbox] dispatch: {sender} → {agent.display_name}")
+        try:
+            async with agent._chat_lock:
+                await agent.chat(
+                    {"role": "user", "content": full_content, "_inbox_sender": sender},
+                    on_token=on_token, on_done=on_done, on_tool_call=on_tool_call,
+                )
+        finally:
+            timer.stop()
+            self.tab_state.streaming_tabs.discard(target_tab_id)
+            try:
+                from textual.widgets import TabbedContent as _TC3
+                if self.query_one("#center-tabs", _TC3).active == target_tab_id:
+                    prompt.disabled = False
+                    prompt.remove_class("streaming")
+                    from mixins.session import SessionMixin
+                    self._update_prompt_title()
+                    prompt.focus()
+            except Exception:
+                pass
 
     @work
     async def _trigger_greeting(self, agent: "Agent", scroll: "VerticalScroll", greeting_prompt: str) -> None:
@@ -177,11 +337,12 @@ class AgentsMixin(_MixinBase):
                 await stream_msg.update_content(_display, final=True)
 
         try:
-            await agent.chat(
-                {"role": "user", "content": greeting_prompt},
-                on_token=on_token,
-                on_done=on_done,
-            )
+            async with agent._chat_lock:
+                await agent.chat(
+                    {"role": "user", "content": greeting_prompt},
+                    on_token=on_token,
+                    on_done=on_done,
+                )
             # 把 trigger user message 從 history 移除，只保留 assistant 開場白
             agent.history = [
                 m for m in agent.history
@@ -288,6 +449,8 @@ class AgentsMixin(_MixinBase):
         await msgs.remove_children()
         await self._render_history_into(msgs, self.agent)
 
+        self._inject_interagent_tools(self.agent)
+        self.agent._rebuild_system_prompt()  # extra_tools_note 更新後重建 system message
         change_str = "、".join(changes) if changes else "（無變更）"
         self.notify(f"✅ {name} 已重載：{change_str}", timeout=4)
 

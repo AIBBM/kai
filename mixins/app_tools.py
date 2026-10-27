@@ -29,6 +29,8 @@ from .app_tool_schemas import (
     REMOVE_MCP_TOOL as _REMOVE_MCP_TOOL,
     RENAME_SESSION_TOOL as _RENAME_SESSION_TOOL,
     SET_TTS_TOOL as _SET_TTS_TOOL,
+    SEND_TO_AGENT_TOOL as _SEND_TO_AGENT_TOOL,
+    TOGGLE_GREETING_TOOL as _TOGGLE_GREETING_TOOL,
 )
 
 class AppToolsMixin(_MixinBase):
@@ -95,9 +97,10 @@ class AppToolsMixin(_MixinBase):
             "以下工具直接操作應用程式介面（開啟/關閉 tab、切換目錄、寫入檔案等）。\n"
             "**嚴禁用文字假裝已執行——必須呼叫對應工具，操作才會真正發生。**\n"
             "收到「開啟/載入 agent」請求時，必須先呼叫 list_open_agents 確認目前狀態，再決定是否呼叫 load_agent。\n"
+            "收到「叫/通知/委派/傳任務給某 agent」的請求時，先呼叫 load_agent（已開啟時僅切換 tab，不重複建），再呼叫 send_to_agent。\n"
             "可用工具：list_open_agents、list_agents、design_system_prompt、create_agent、load_agent、"
             "close_agent、delete_agent、reload_agent、change_dir、switch_model、remember、rename_session、"
-            "reload_config、compact_history、list_mcp、add_mcp、remove_mcp、reload_mcp、set_tts。"
+            "reload_config、compact_history、list_mcp、add_mcp、remove_mcp、reload_mcp、set_tts、send_to_agent。"
         )
 
         agent.extra_tools = [
@@ -120,6 +123,8 @@ class AppToolsMixin(_MixinBase):
             _REMOVE_MCP_TOOL,
             _RELOAD_MCP_TOOL,
             _SET_TTS_TOOL,
+            _TOGGLE_GREETING_TOOL,
+            _SEND_TO_AGENT_TOOL,
         ]
         agent.extra_tools_map = {
             "list_open_agents":      self._app_list_open_agents,
@@ -141,6 +146,8 @@ class AppToolsMixin(_MixinBase):
             "remove_mcp":       self._app_remove_mcp,
             "reload_mcp":       self._app_reload_mcp,
             "set_tts":          self._app_set_tts,
+            "toggle_greeting":  self._app_toggle_greeting,
+            "send_to_agent":    self._app_send_to_agent,
         }
 
     # ── callbacks ─────────────────────────────────────────────────────────────
@@ -392,11 +399,60 @@ class AppToolsMixin(_MixinBase):
         except Exception as e:
             return f"重新載入失敗：{e}"
 
+    def _inject_interagent_tools(self, agent: "Agent") -> None:
+        """為 subagent 注入通信工具：send_to_agent、load_agent、list_open_agents。"""
+        _self = self
+        _caller = agent
+
+        async def _send(name: str, message: str) -> str:
+            return await _self._app_send_to_agent(name, message, caller=_caller)
+
+        async def _load(name: str) -> str:
+            return await _self._app_load_agent(name)
+
+        agent.extra_tools = [_SEND_TO_AGENT_TOOL, _LOAD_AGENT_TOOL, _LIST_OPEN_AGENTS_TOOL]
+        agent.extra_tools_map = {
+            "send_to_agent": _send,
+            "load_agent": _load,
+            "list_open_agents": _self._app_list_open_agents,
+        }
+        agent.extra_tools_note = (
+            "\n\n## \U0001f91d Agent 通信工具\n"
+            "要傳指令給其他 agent：先呼叫 load_agent（已開啟時僅切換 tab，不重複建），再呼叫 send_to_agent。\n"
+            "若不確定 agent 名稱，先用 list_open_agents 查詢。"
+        )
+
+    async def _app_send_to_agent(self, name: str, message: str, caller: "Agent | None" = None) -> str:
+        from loguru import logger
+        from app import AgentMessage
+        sender_name = caller.display_name if caller else (self.tab_state.main_agent or self.agent).display_name
+        q = name.strip().lower()
+        main = self.tab_state.main_agent
+        if main and q in ("main", "chat", main.display_name.lower()):
+            logger.info(f"[inbox] send: {sender_name} → main")
+            self.post_message(AgentMessage(sender=sender_name, target="main", content=message))
+            return "✅ 訊息已傳送給 main agent"
+        for ag in self.tab_state.agent_tabs.values():
+            nick = (ag._nickname or "").lower()
+            dir_name = (ag._agent_dir.name if ag._agent_dir else "").lower()
+            if q in nick or nick in q or q in dir_name or dir_name in q:
+                logger.info(f"[inbox] send: {sender_name} → {ag.display_name}")
+                self.post_message(AgentMessage(sender=sender_name, target=ag.display_name, content=message))
+                return f"✅ 訊息已傳送給 {ag.display_name}"
+        logger.warning(f"[inbox] send_to_agent 找不到 '{name}'，已開啟：{[a.display_name for a in self.tab_state.agent_tabs.values()]}")
+        return f"❌ 找不到已開啟的 agent：{name}。請先用 load_agent 載入。"
+
     async def _app_set_tts(self, engine: str) -> str:
         self._do_tts_switch(engine)
         if engine == "off":
             return "✅ TTS 已關閉"
         return f"✅ TTS 已切換為：{engine}"
+
+    async def _app_toggle_greeting(self, enabled: bool) -> str:
+        self.ui_state.greeting_enabled = enabled
+        label = "開啟" if enabled else "關閉"
+        self.notify(f"Greeting：{label}", severity="information", timeout=3)
+        return f"✅ Greeting 已{label}（下次載入 agent 時生效）"
 
     # ── 切換模型後重新注入（新 Agent 物件需要重注入）──────────────────────────
 

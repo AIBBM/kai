@@ -241,6 +241,21 @@ AIMessage.select-mode .ta-view {
     color: $text;
 }
 
+.inbox-bubble {
+    background: $accent 15%;
+    color: $accent;
+    padding: 0;
+    margin: 1 0 0 0;
+    border: none;
+    border-left: thick $accent;
+}
+
+.inbox-bubble > CollapsibleTitle {
+    background: $accent 15%;
+    color: $accent;
+    padding: 0 1;
+}
+
 .tool-result-body {
     background: $surface;
     color: $text-muted;
