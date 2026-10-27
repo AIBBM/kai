@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "RepoMapper": {
-      "type": "stdio",
-      "command": "/home/user/RepoMapper/.venv/bin/python",
-      "args": ["/home/user/RepoMapper/repomap_server.py"]
-    }
-  }
-}

@@ -21,6 +21,7 @@ images/
 # Claude Code local settings
 .claude/settings.json
 .claude/settings.local.json
+.mcp.json
 
 # Tool caches
 .repomap.tags.cache.v1/
