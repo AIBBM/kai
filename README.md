@@ -24,7 +24,7 @@
 /create-agent 台股技術分析師，擅長 K 線、均線、籌碼分析
 ```
 
-由 LLM 設計整份 agent 設定（system prompt、模型、暱稱、語音），存成 `agents/<name>/config.json`。每個分身開在自己的 tab，有獨立的對話歷史、記憶和 MCP 工具，分身之間還能互相傳訊息分工。
+由 LLM 設計整份 agent 設定（system prompt、模型、暱稱、語音），存成 `agents/<name>/config.json`。每個分身開在自己的 tab，有獨立的對話歷史與記憶，可共用主 agent 的 MCP 工具，分身之間還能互相傳訊息分工。
 
 ### 🗣️ 用說的就能操作 Kai 本身
 
@@ -32,7 +32,7 @@
 
 ### 🔗 MCP 原生整合：不只是聊天，是真的能做事
 
-支援 stdio 與 HTTP transport，設定分全域、專案、單一 agent 三層，執行中可以熱重載與增刪。Kai 會偵測掛上了哪些 MCP 工具（filesystem、browser、[RepoMapper](https://github.com/pdavis68/RepoMapper) 等），自動調整 system prompt 裡的使用規則：例如掛上 RepoMapper 後，AI 會先用 repo map 理解專案結構，而不是逐檔 `cat`。
+支援 stdio 與 HTTP transport，設定分全域與專案兩層，執行中可以熱重載與增刪。Kai 會偵測掛上了哪些 MCP 工具（filesystem、browser、[RepoMapper](https://github.com/pdavis68/RepoMapper) 等），自動調整 system prompt 裡的使用規則：例如掛上 RepoMapper 後，AI 會先用 repo map 理解專案結構，而不是逐檔 `cat`。
 
 ### 🧩 不被單一供應商綁架
 
@@ -80,7 +80,7 @@ agents/
 
 ## 🔗 MCP 整合
 
-設定檔位置：`~/.kai/mcp_servers.json`（全域）、`<專案>/.kai/mcp_servers.json`（專案），或寫在 agent 的 `config.json`。
+設定檔位置：`~/.kai/mcp_servers.json`（全域）、`<專案>/.kai/mcp_servers.json`（專案）。分身預設共用這些 MCP 工具，在 agent 的 `config.json` 設 `"mcp_servers": {}` 則不使用 MCP。
 
 ```json
 {
@@ -181,7 +181,7 @@ flowchart TB
 
 - **分層**：`core/` 不 import 任何 UI 元件，agent 邏輯可以獨立測試與重用。
 - **工具並行**：模型一次要求多個工具時用 `asyncio.gather` 同時執行，並設呼叫次數上限。
-- **分身隔離**：每個分身有自己的對話歷史、記憶、MCP 設定與 chat lock；分身之間用 `send_to_agent` 非同步傳訊，單一分身出錯不影響其他 tab。
+- **分身隔離**：每個分身有自己的對話歷史、記憶與 chat lock；分身之間用 `send_to_agent` 非同步傳訊，單一分身出錯不影響其他 tab。
 - **串流效能**：串流中只更新純文字，完成後才渲染一次 Markdown，避免長回應越跑越慢。
 
 ## 📖 文件
