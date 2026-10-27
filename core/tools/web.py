@@ -2,7 +2,7 @@ import time
 
 import httpx
 from loguru import logger
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, field_validator
 from tenacity import (
     retry,
     retry_if_exception_type,

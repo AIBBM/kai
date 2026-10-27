@@ -8,7 +8,6 @@ from pathlib import Path
 
 from rich.text import Text
 from textual import work
-from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from core.config import BASH_TIMEOUT, get_nickname

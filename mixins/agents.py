@@ -13,7 +13,7 @@ from widgets.input import HistoryInput
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app import ChatApp as _MixinBase
+    from app import AgentMessage, ChatApp as _MixinBase
 else:
     _MixinBase = object  # type: ignore[assignment,misc]
 
@@ -72,7 +72,6 @@ class AgentsMixin(_MixinBase):
 
     async def _do_load_agent(self, name: str) -> None:
         from core.agent_factory import find_agent, load_agent
-        from textual.widgets import TabbedContent
         # scope 前綴（來自 AgentsScreen）直接傳入；否則做模糊比對
         if name.startswith(("local:", "global:")):
             resolved = name
@@ -292,7 +291,6 @@ class AgentsMixin(_MixinBase):
                 if self.query_one("#center-tabs", _TC3).active == target_tab_id:
                     prompt.disabled = False
                     prompt.remove_class("streaming")
-                    from mixins.session import SessionMixin
                     self._update_prompt_title()
                     prompt.focus()
             except Exception:

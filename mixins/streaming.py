@@ -207,7 +207,6 @@ class StreamingMixin(_MixinBase):
                 cap = 1000
                 result_preview = result[:cap] + (f"\n…（共 {len(result)} 字元）" if len(result) > cap else "")
                 at_bot = _at_bottom()
-                from textual.widgets import Label
                 from textual.containers import Vertical
                 await msgs.mount(Collapsible(
                     Vertical(
