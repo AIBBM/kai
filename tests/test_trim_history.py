@@ -22,10 +22,11 @@ def test_system_always_kept(monkeypatch):
     assert result[0] == SYS
 
 
-def test_trims_to_last_keep(monkeypatch):
+def test_trims_to_last_keep_pairs(monkeypatch):
+    # history_keep 以 pair 計算：keep=3 → 保留最後 6 則
     history = [SYS] + [msg("user", i) for i in range(10)]
     result = trim(history, keep=3, monkeypatch=monkeypatch)
-    assert result == [SYS, msg("user", 7), msg("user", 8), msg("user", 9)]
+    assert result == [SYS] + [msg("user", i) for i in range(4, 10)]
 
 
 def test_short_history_kept_in_full(monkeypatch):
@@ -36,8 +37,8 @@ def test_short_history_kept_in_full(monkeypatch):
 
 def test_no_system_message(monkeypatch):
     history = [msg("user", i) for i in range(5)]
-    result = trim(history, keep=3, monkeypatch=monkeypatch)
-    assert result == [msg("user", 2), msg("user", 3), msg("user", 4)]
+    result = trim(history, keep=1, monkeypatch=monkeypatch)
+    assert result == [msg("user", 3), msg("user", 4)]
 
 
 def test_system_not_counted_toward_keep(monkeypatch):
@@ -54,5 +55,12 @@ def test_empty_history(monkeypatch):
 
 def test_tool_messages_counted_as_non_system(monkeypatch):
     history = [SYS, msg("tool", 0), msg("tool", 1), msg("tool", 2), msg("tool", 3)]
-    result = trim(history, keep=2, monkeypatch=monkeypatch)
+    result = trim(history, keep=1, monkeypatch=monkeypatch)
     assert result == [SYS, msg("tool", 2), msg("tool", 3)]
+
+
+def test_private_fields_stripped(monkeypatch):
+    # _ 開頭的內部欄位不送給模型
+    history = [SYS, {"role": "user", "content": "hi", "_sender": "pm"}]
+    result = trim(history, keep=5, monkeypatch=monkeypatch)
+    assert result == [SYS, {"role": "user", "content": "hi"}]
