@@ -20,6 +20,6 @@
 設計原則：
 - system_prompt 要具體、有深度，包含專業術語和邊界條件
 - nickname 要貼切且好記
-- model 選擇依任務性質：需要思考選 gemini-2.5-flash，純對話選 deepseek-v4-flash，需視覺選 qwen3-vl:4b
+- model 預設用 {default_model}（使用者目前在用的模型，確定可用）；只有任務明確需要看圖片時，才改選可用模型中支援視覺的模型
 - mcp_servers 保持空物件（用戶可自行擴充）
 - history_keep 依任務複雜度調整（10-30）

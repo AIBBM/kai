@@ -61,7 +61,9 @@ async def call_full_design(description: str) -> dict[str, Any]:
     from core.models import REGISTRY
     design_model = _cfg.CREATE_AGENT_MODEL or _cfg.MODEL
     model_list = ", ".join(REGISTRY.keys())
-    prompt = _apply_template(_DESIGN_BASE, description=description, models=model_list)
+    prompt = _apply_template(
+        _DESIGN_BASE, description=description, models=model_list, default_model=_cfg.MODEL,
+    )
     raw = await _call_backend(design_model, [{"role": "user", "content": prompt}])
     try:
         return extract_json(raw)
