@@ -1,6 +1,6 @@
 # Kai — 終端機裡的 AI 指揮塔
 
-[![CI](https://github.com/aibbm/kai/actions/workflows/ci.yml/badge.svg)](https://github.com/aibbm/kai/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/aibbm/kai/actions/workflows/ci.yml/badge.svg)](https://github.com/aibbm/kai/actions/workflows/ci.yml) [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 用自然語言操作你的系統、一句話生出專業 AI 分身、串接 MCP 生態，全程不離開 terminal。
 
@@ -134,6 +134,55 @@ agents/
 優先順序：`<專案>/.kai/config.json` > `~/.kai/config.json` > `.env` > 程式預設值。
 
 `.env` 只放 API 金鑰（範本見 [.env.example](.env.example)），其他調校參數放 `config.json`。執行 `/init-config` 開互動面板查看每個值的來源並匯出，`/reload-config` 免重啟套用。
+
+## 🏗️ 架構
+
+```mermaid
+flowchart TB
+    U([使用者]) --> Main
+
+    subgraph TUI["Textual TUI：app.py · mixins/ · widgets/"]
+        Main["主 Agent<br/>Chat tab"]
+        Sub["分身 Agent<br/>各自一個 tab"]
+        AppFn["App 功能<br/>開關分身 · 切模型 · MCP · TTS"]
+        Main <-->|send_to_agent| Sub
+        Main -.->|19 個 app tools| AppFn
+    end
+
+    Factory["Agent Factory<br/>/create-agent"] -->|LLM 設計 config.json| Sub
+
+    subgraph Core["core/：工具呼叫迴圈"]
+        Loop["Agent.chat<br/>串流 → 工具呼叫 → 再呼叫"]
+        Dispatch["run_tool<br/>MCP 優先，其次內建工具"]
+        Loop --> Dispatch
+    end
+
+    Main --> Loop
+    Sub --> Loop
+
+    Loop --> Backends["模型後端<br/>Ollama 本地模型 · Gemini · DeepSeek"]
+
+    Dispatch --> Builtin["內建工具<br/>web_search · fetch_urls<br/>bash_exec · dify_retrieve"]
+    Dispatch --> MCP["MCP client<br/>stdio · HTTP"]
+    Builtin --> SearXNG[(SearXNG)]
+    MCP --> Servers["MCP servers<br/>filesystem · browser · RepoMapper …"]
+```
+
+| 目錄 | 職責 |
+|------|------|
+| `app.py` | 程式入口；`ChatApp` 組合所有 mixin |
+| `core/` | 與 UI 無關的核心：`Agent` 工具呼叫迴圈、模型串流後端、MCP client、Agent Factory、設定、TTS |
+| `core/tools/` | 內建工具：網路搜尋與抓取、bash、Dify RAG，以及 `run_tool` 分派 |
+| `mixins/` | `ChatApp` 的行為依職責拆分：串流、agent 管理、app tools、session、MCP、bash |
+| `widgets/` | 自訂 Textual 元件：檔案樹、檔案檢視器、聊天訊息、各種對話框 |
+| `prompts/` | Agent Factory 的設計 prompt |
+
+幾個關鍵設計：
+
+- **分層**：`core/` 不 import 任何 UI 元件，agent 邏輯可以獨立測試與重用。
+- **工具並行**：模型一次要求多個工具時用 `asyncio.gather` 同時執行，並設呼叫次數上限。
+- **分身隔離**：每個分身有自己的對話歷史、記憶、MCP 設定與 chat lock；分身之間用 `send_to_agent` 非同步傳訊，單一分身出錯不影響其他 tab。
+- **串流效能**：串流中只更新純文字，完成後才渲染一次 Markdown，避免長回應越跑越慢。
 
 ## 📖 文件
 
