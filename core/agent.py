@@ -52,7 +52,8 @@ class Agent:
             "dify_retrieve": dify_retrieve,
         }
         self.datasets: list[str] = []  # 此 agent 可查的 Dify KB ID 清單（空 = 不啟用 RAG）
-        self._dify_table: str = ""  # fetch_dify_datasets 的快取，chat() 每輪更新
+        self._dify_table: str = ""  # fetch_dify_datasets
+        self._chat_lock: asyncio.Lock = asyncio.Lock()  # 防止並發 chat() 呼叫
         # app-level tools（由 ChatApp._inject_app_tools 注入，只有 main agent 有）
         self.extra_tools: list[dict] = []
         self.extra_tools_map: dict = {}
@@ -100,11 +101,6 @@ class Agent:
         """
         agent_dir_str = str(base_dir.resolve())
         now = datetime.now().strftime("%Y-%m-%d")
-        result = prompt
-        result = result.replace("{AGENT_DIR}", agent_dir_str)
-        result = result.replace("{CWD}", os.getcwd())
-        result = result.replace("{DATE}", now)
-
         def _do_include(m: re.Match) -> str:
             fname = m.group(1).strip()
             fpath = base_dir / fname
@@ -113,7 +109,11 @@ class Agent:
             except Exception:
                 return f"[include not found: {fname}]"
 
-        result = re.sub(r"\{\{include:([^}]+)\}\}", _do_include, result)
+        # include 先展開，被包含檔裡的 {AGENT_DIR}/{DATE} 等變數才能被接下來的 replace 處理到
+        result = re.sub(r"\{\{include:([^}]+)\}\}", _do_include, prompt)
+        result = result.replace("{AGENT_DIR}", agent_dir_str)
+        result = result.replace("{CWD}", os.getcwd())
+        result = result.replace("{DATE}", now)
         result = result.replace("{DIFY_DATASETS}", self._dify_table)
         return result
 
@@ -361,7 +361,8 @@ class Agent:
         keep = self.history_keep if self.history_keep else HISTORY_KEEP
         system = [m for m in self.history if m["role"] == "system"]
         rest = [m for m in self.history if m["role"] != "system"]
-        return system + rest[-(keep * 2):]
+        kept = system + rest[-(keep * 2):]
+        return [{k: v for k, v in m.items() if not k.startswith("_")} for m in kept]
 
     def _trim_tool_result(self, content: str) -> str:
         """HTML 去標簽；超長截斷。"""
