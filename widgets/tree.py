@@ -510,7 +510,25 @@ class FileTree(Widget):
     ) -> None:
         self.app.push_screen(TreeContextMenu(event.path, event.sx, event.sy))
 
+    def _collect_expanded_paths(self) -> set[Path]:
+        """收集目前所有展開的目錄節點路徑（root 除外）。"""
+        expanded: set[Path] = set()
+        try:
+            tree = self.query_one(RightClickTree)
+
+            def _walk(node: TreeNode) -> None:
+                if node is not tree.root and node.is_expanded and isinstance(node.data, Path):
+                    expanded.add(node.data)
+                for child in node.children:
+                    _walk(child)
+
+            _walk(tree.root)
+        except Exception:
+            pass
+        return expanded
+
     def refresh_tree(self) -> None:
+        expanded_paths = self._collect_expanded_paths()
         self._path_to_node.clear()
         tree = self.query_one(RightClickTree)
         cwd = Path(os.getcwd())
@@ -518,4 +536,10 @@ class FileTree(Widget):
         tree.root.data = cwd
         self._populate(tree.root)
         tree.root.expand()
+        # 由淺到深恢復展開狀態，每層先 _populate 再 expand
+        for path in sorted(expanded_paths, key=lambda p: len(p.parts)):
+            node = self._path_to_node.get(path)
+            if node and not node.is_expanded:
+                self._populate(node)
+                node.expand()
         self._dir_mtimes = self._scan_mtimes(cwd)
