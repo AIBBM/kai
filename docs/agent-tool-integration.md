@@ -125,7 +125,7 @@ self.tools_map = {
 
 ## 模式三：MCP server
 
-將工具包裝成符合 MCP（Model Context Protocol）規範的獨立 server，透過 `config.json` 的 `mcp_servers` 欄位掛載到特定 agent。
+將工具包裝成符合 MCP（Model Context Protocol）規範的獨立 server，透過 `mcp_servers.json` 掛載（分身共用主 agent 的 MCP client）。
 
 ```
 AI

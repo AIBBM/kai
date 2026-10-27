@@ -287,7 +287,7 @@ Each agent directory contains a `config.json`. All fields:
 | `description` | | 一行說明，`/list-agents` 顯示 |
 | `greeting` | | 全新對話時 AI 主動說第一句話的 prompt |
 | `history_keep` | | 記住幾個來回（pair）；預設用 env `HISTORY_KEEP=10` |
-| `mcp_servers` | | 額外 MCP servers（同 global 格式） |
+| `mcp_servers` | | 設為 `{}` 則此 agent 不使用 MCP；省略或非空則共用 main agent 的 MCP client（尚未支援 agent 專屬 server） |
 | `tts` | | TTS 設定（見下表）；省略則不啟用語音 |
 
 ### `system_prompt` 模板變數
@@ -364,13 +364,12 @@ To update a running agent's system prompt: edit `agents/<name>/config.json` → 
 
 ## MCP configuration
 
-Two config files control MCP servers:
+Two config files control MCP servers (subagents share the main agent's MCP client):
 
 | File | Scope | Purpose |
 |------|-------|---------|
 | `~/.kai/mcp_servers.json` | global (user home) | MCP servers available to all agents across all projects |
 | `cwd/.kai/mcp_servers.json` | project-local | project-specific MCP servers; merged with global |
-| `agents/<name>/config.json` `.mcp_servers` | agent-level | extra servers for a specific agent |
 
 Disabled servers use a `_` prefix in `mcp_servers.json` (e.g. `_playwright`, `_twstock-db`). The `_` prefix convention prevents accidental activation — remove it to enable.
 
