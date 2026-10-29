@@ -1,6 +1,6 @@
 # Kai — 終端機裡的 AI 指揮塔
 
-[![CI](https://github.com/aibbm/kai/actions/workflows/ci.yml/badge.svg)](https://github.com/aibbm/kai/actions/workflows/ci.yml) [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/duncan-wen/kai/actions/workflows/ci.yml/badge.svg)](https://github.com/duncan-wen/kai/actions/workflows/ci.yml) [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 用自然語言操作你的系統、一句話生出專業 AI 分身、串接 MCP 生態，全程不離開 terminal。
 
@@ -47,7 +47,7 @@ Textual 打造的完整 TUI，不是網頁套殼：檔案樹、語法高亮檢�
 需求：Python 3.13+、[uv](https://docs.astral.sh/uv/)；本地模型需要 [Ollama](https://ollama.com/)，網路搜尋需要 Docker。
 
 ```bash
-git clone https://github.com/aibbm/kai.git && cd kai
+git clone https://github.com/duncan-wen/kai.git && cd kai
 uv sync                     # 需要 kokoro / melotts TTS 時：uv sync --extra tts
 cp .env.example .env        # 填入 API keys 與 SEARXNG_SECRET（openssl rand -hex 32）
 docker compose up -d        # 啟動 SearXNG（web_search 用，可略過）
