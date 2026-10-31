@@ -4,7 +4,7 @@
 
 用自然語言操作你的系統、一句話生出專業 AI 分身、串接 MCP 生態，全程不離開 terminal。
 
-<img width="1280" alt="kai demo：一句話建立分身，再用自然語言交派任務" src="https://github.com/user-attachments/assets/f8bbb727-744b-4cff-ae60-c3840396cd29" />
+<img width="1280" alt="kai demo：一句話建立分身，再用自然語言交派任務" src="docs/assets/hero.gif" />
 
 ```
 ┌─ FileTree ─┬──── Chat / Agent Tabs ────┬─ Sidebar ─┐
